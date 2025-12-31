@@ -4,3 +4,5 @@ dist/
 wallet_data.json
 *.log
 
+
+wallets.json

@@ -32,6 +32,7 @@ async function init() {
       updateStatus('connected', 'Connected');
       updateWalletInfo(status.wallet, status.llmProvider);
       isInitialized = true;
+      fetchWallets();
     } else {
       // Try to initialize
       updateStatus('initializing', 'Initializing...');
@@ -99,14 +100,14 @@ function addMessage(role, content, toolCalls = null) {
     title.className = 'tool-calls-title';
     title.textContent = 'Tools used:';
     toolCallsDiv.appendChild(title);
-    
+
     toolCalls.forEach(tc => {
       const item = document.createElement('div');
       item.className = 'tool-call-item';
       item.textContent = `• ${tc.name}`;
       toolCallsDiv.appendChild(item);
     });
-    
+
     contentDiv.appendChild(toolCallsDiv);
   }
 
@@ -154,24 +155,24 @@ function removeLoadingMessage() {
  */
 function addTransactionConfirmation(messageDiv) {
   hasPendingTransaction = true;
-  
+
   const confirmDiv = document.createElement('div');
   confirmDiv.className = 'transaction-confirm';
   confirmDiv.id = 'transaction-confirm';
-  
+
   const confirmBtn = document.createElement('button');
   confirmBtn.className = 'confirm-btn';
   confirmBtn.textContent = '✅ 确认执行';
   confirmBtn.onclick = confirmTransaction;
-  
+
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'cancel-btn';
   cancelBtn.textContent = '❌ 取消';
   cancelBtn.onclick = cancelTransaction;
-  
+
   confirmDiv.appendChild(confirmBtn);
   confirmDiv.appendChild(cancelBtn);
-  
+
   messageDiv.querySelector('.message-content').appendChild(confirmDiv);
 }
 
@@ -180,25 +181,25 @@ function addTransactionConfirmation(messageDiv) {
  */
 async function confirmTransaction() {
   if (!hasPendingTransaction || isProcessing) return;
-  
+
   isProcessing = true;
   const confirmDiv = document.getElementById('transaction-confirm');
   if (confirmDiv) {
     confirmDiv.innerHTML = '<span class="loading"></span> 正在执行交易...';
   }
-  
+
   try {
     const response = await fetch(`${API_BASE}/api/confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    
+
     const data = await response.json();
-    
+
     if (confirmDiv) {
       confirmDiv.remove();
     }
-    
+
     hasPendingTransaction = false;
     addMessage('assistant', data.message, data.toolCalls);
   } catch (error) {
@@ -216,22 +217,22 @@ async function confirmTransaction() {
  */
 async function cancelTransaction() {
   if (!hasPendingTransaction || isProcessing) return;
-  
+
   isProcessing = true;
-  
+
   try {
     const response = await fetch(`${API_BASE}/api/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    
+
     const data = await response.json();
-    
+
     const confirmDiv = document.getElementById('transaction-confirm');
     if (confirmDiv) {
       confirmDiv.remove();
     }
-    
+
     hasPendingTransaction = false;
     addMessage('assistant', data.message);
   } catch (error) {
@@ -277,7 +278,7 @@ async function sendMessage() {
     }
 
     const data = await response.json();
-    
+
     // Check if there's a pending transaction requiring confirmation
     if (data.pendingTransaction) {
       const messageDiv = document.createElement('div');
@@ -287,7 +288,7 @@ async function sendMessage() {
       avatar.textContent = '🤖';
       const contentDiv = document.createElement('div');
       contentDiv.className = 'message-content';
-      
+
       // Parse markdown-like content
       const lines = data.message.split('\n');
       lines.forEach(line => {
@@ -298,11 +299,11 @@ async function sendMessage() {
           contentDiv.appendChild(p);
         }
       });
-      
+
       messageDiv.appendChild(avatar);
       messageDiv.appendChild(contentDiv);
       chatMessages.appendChild(messageDiv);
-      
+
       // Add confirmation buttons
       addTransactionConfirmation(messageDiv);
       chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -396,9 +397,136 @@ messageInput.addEventListener('keydown', (e) => {
   }
 });
 
+// --- Wallet Management ---
+
+async function fetchWallets() {
+  try {
+    const response = await fetch('/api/wallets');
+    const data = await response.json();
+    if (data.success) {
+      updateWalletSelect(data.wallets);
+    }
+  } catch (error) {
+    console.error('Failed to fetch wallets:', error);
+  }
+}
+
+function updateWalletSelect(wallets) {
+  const select = document.getElementById('wallet-select');
+  const currentAddress = document.getElementById('walletAddress').textContent;
+
+  select.innerHTML = '<option value="" disabled>Select Wallet...</option>';
+
+  wallets.forEach(wallet => {
+    const option = document.createElement('option');
+    option.value = wallet.id;
+    option.textContent = `${wallet.alias} (${wallet.address.substring(0, 6)}...)`;
+
+    // Try to auto-select if matches current address
+    if (currentAddress && currentAddress.toLowerCase() === wallet.address.toLowerCase()) {
+      option.selected = true;
+    }
+
+    select.appendChild(option);
+  });
+}
+
+async function handleWalletSwitch(event) {
+  const walletId = event.target.value;
+  if (!walletId) return;
+
+  try {
+    addMessage('assistant', 'Switching wallet...');
+
+    const response = await fetch('/api/wallets/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: walletId })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      updateWalletInfo(data.wallet, 'alibaba');
+      addMessage('assistant', `Switched to wallet: ${data.wallet.address}`);
+    } else {
+      addMessage('assistant', `Failed to switch: ${data.error}`);
+    }
+  } catch (error) {
+    addMessage('assistant', `Error switching wallet: ${error.message}`);
+  }
+}
+
+async function handleCreateWallet() {
+  const alias = prompt('Enter name for new wallet:');
+  if (!alias) return;
+
+  try {
+    const response = await fetch('/api/wallets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias })
+    });
+
+    const data = await response.json();
+    if (data.success) {
+      alert(`Wallet created! ${data.wallet.address}`);
+      await fetchWallets(); // Refresh list
+      // Auto switch
+      const select = document.getElementById('wallet-select');
+      // Find the new option and select it
+      const options = Array.from(select.options);
+      const newOption = options.find(opt => opt.text.includes(alias));
+      if (newOption) {
+        select.value = newOption.value;
+        select.dispatchEvent(new Event('change'));
+      }
+    } else {
+      alert('Failed to create wallet: ' + data.error);
+    }
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+async function handleExportWallet() {
+  const select = document.getElementById('wallet-select');
+  const walletId = select.value;
+
+  if (!walletId) {
+    alert('Please select a wallet first.');
+    return;
+  }
+
+  if (!confirm('WARNING: This will display your PRIVATE KEY. Ensure you are in a safe environment. Do you want to proceed?')) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/wallets/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: walletId })
+    });
+
+    const data = await response.json();
+    if (data.success) {
+      prompt('Your Private Key (Copy and save it securely):', data.privateKey);
+    } else {
+      alert('Failed to export wallet: ' + data.error);
+    }
+  } catch (error) {
+    console.error(error);
+    alert('Error exporting wallet: ' + error.message);
+  }
+}
+
 messageInput.addEventListener('input', adjustTextareaHeight);
 
 clearButton.addEventListener('click', clearHistory);
+document.getElementById('wallet-select').addEventListener('change', handleWalletSwitch);
+document.getElementById('create-wallet-btn').addEventListener('click', handleCreateWallet);
+document.getElementById('export-wallet-btn').addEventListener('click', handleExportWallet);
 
 // Initialize on load
 init();

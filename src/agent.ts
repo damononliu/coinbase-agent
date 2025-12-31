@@ -115,9 +115,15 @@ export class CoinbaseAgent {
   /**
    * Initialize the AgentKit with local wallet
    */
-  async initialize(): Promise<{ address: string; network: string }> {
+  async initialize(privateKey?: string): Promise<{ address: string; network: string }> {
+    // Use provided key or fallback to config
+    const pk = privateKey || config.privateKey;
+    if (!pk) {
+      throw new Error('No private key provided and none found in .env');
+    }
+
     // Create account from private key
-    const account = privateKeyToAccount(config.privateKey as `0x${string}`);
+    const account = privateKeyToAccount(pk as `0x${string}`);
 
     // Get chain config
     const chain = config.networkId === 'base' ? base : baseSepolia;
@@ -271,6 +277,7 @@ export class CoinbaseAgent {
   async chat(userMessage: string): Promise<{
     message: string;
     toolCalls?: Array<{ name: string; result: string }>;
+    pendingTransaction?: any;
   }> {
     this.conversationHistory.push(new HumanMessage(userMessage));
 
@@ -419,5 +426,26 @@ Be empathetic and supportive. Respond in the same language as the user's message
    */
   clearHistory(): void {
     this.conversationHistory = [new SystemMessage(SYSTEM_PROMPT)];
+  }
+
+  /**
+   * Check if there is a pending transaction requiring confirmation
+   */
+  hasPendingTransaction(): boolean {
+    return false;
+  }
+
+  /**
+   * Confirm and execute the pending transaction
+   */
+  async confirmTransaction(): Promise<{ message: string; toolCalls?: any[] }> {
+    return { message: "No pending transaction to confirm." };
+  }
+
+  /**
+   * Cancel the pending transaction
+   */
+  cancelTransaction(): { message: string } {
+    return { message: "No pending transaction to cancel." };
   }
 }

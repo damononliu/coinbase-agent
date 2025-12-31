@@ -51,9 +51,7 @@ export function validateConfig(): { valid: boolean; errors: string[] } {
     errors.push('DASHSCOPE_API_KEY is required for Alibaba Cloud');
   }
 
-  if (!config.privateKey) {
-    errors.push('PRIVATE_KEY is required (your wallet private key, starts with 0x)');
-  }
+  // NOTE: privateKey is no longer strictly checked here because it might be supplied dynamically via WalletManager
 
   return { valid: errors.length === 0, errors };
 }

@@ -6,20 +6,78 @@
 
 import chalk from 'chalk';
 import ora from 'ora';
-import { input } from '@inquirer/prompts';
+import { input, select } from '@inquirer/prompts';
 import { config, validateConfig } from './config.js';
 import { CoinbaseAgent } from './agent.js';
+import { walletManager } from './wallet-manager.js';
 
 async function main() {
   console.log(chalk.cyan.bold('\n🤖 Coinbase AgentKit Wallet Agent\n'));
 
-  // Validate config
+  // Validate config (skip private key check here as we handle it below)
   const validation = validateConfig();
   if (!validation.valid) {
     console.log(chalk.red('Configuration errors:'));
     validation.errors.forEach((err) => console.log(chalk.red(`  - ${err}`)));
-    console.log(chalk.yellow('\nPlease set up your .env file.'));
-    console.log(chalk.dim('See README.md for instructions.\n'));
+    // process.exit(1); // Don't exit yet, might select wallet manually
+  }
+
+  // Wallet Selection
+  let selectedPrivateKey = config.privateKey;
+  let walletSource = 'Environment';
+
+  const choices = [
+    { name: 'Use Default Wallet (.env)', value: 'env', disabled: !config.privateKey },
+    { name: 'Select Saved Wallet', value: 'select' },
+    { name: 'Create New Wallet', value: 'create' },
+    { name: 'Import Wallet', value: 'import' },
+  ];
+
+  const action = await select({
+    message: 'Select Wallet Option:',
+    choices: choices,
+  });
+
+  if (action === 'select') {
+    const wallets = walletManager.listWallets();
+    if (wallets.length === 0) {
+      console.log(chalk.yellow('No saved wallets found. Creating a new one...'));
+      const alias = await input({ message: 'Enter name for new wallet:' });
+      const newWallet = walletManager.createWallet(alias);
+      selectedPrivateKey = newWallet.privateKey;
+      walletSource = `Saved (${newWallet.alias})`;
+    } else {
+      const walletId = await select({
+        message: 'Choose a wallet:',
+        choices: wallets.map(w => ({ name: `${w.alias} (${w.address})`, value: w.id })),
+      });
+      const wallet = walletManager.getWallet(walletId);
+      if (wallet) {
+        selectedPrivateKey = wallet.privateKey;
+        walletSource = `Saved (${wallet.alias})`;
+      }
+    }
+  } else if (action === 'create') {
+    const alias = await input({ message: 'Enter name for new wallet:' });
+    const newWallet = walletManager.createWallet(alias);
+    selectedPrivateKey = newWallet.privateKey;
+    walletSource = `New (${newWallet.alias})`;
+    console.log(chalk.green(`Wallet created! Address: ${newWallet.address}`));
+  } else if (action === 'import') {
+    const alias = await input({ message: 'Enter name for wallet:' });
+    const pk = await input({ message: 'Enter private key (starts with 0x):' });
+    try {
+      const newWallet = walletManager.importWallet(alias, pk);
+      selectedPrivateKey = newWallet.privateKey;
+      walletSource = `Imported (${newWallet.alias})`;
+    } catch (e) {
+      console.error(chalk.red('Invalid private key'));
+      process.exit(1);
+    }
+  }
+
+  if (!selectedPrivateKey) {
+    console.log(chalk.red('No valid wallet selected. Exiting.'));
     process.exit(1);
   }
 
@@ -28,7 +86,8 @@ async function main() {
 
   try {
     const agent = new CoinbaseAgent();
-    const walletInfo = await agent.initialize();
+    // Pass the selected private key
+    const walletInfo = await agent.initialize(selectedPrivateKey);
 
     spinner.succeed('AgentKit ready!');
 

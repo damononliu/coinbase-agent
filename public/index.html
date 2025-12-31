@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Coinbase AgentKit Wallet Agent</title>
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
   <div class="container">
     <header>
@@ -31,12 +33,32 @@
       </div>
     </div>
 
+    <!-- Wallet Manager Section -->
+    <div id="wallet-manager-card" class="card"
+      style="margin-top: 1rem; background: var(--bg-card); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+      <div class="card-header" style="margin-bottom: 1rem;">
+        <h2 style="font-size: 1.1rem; margin: 0;">Wallet Manager</h2>
+      </div>
+      <div class="card-body">
+        <div class="info-row" style="display: flex; align-items: center; gap: 10px;">
+          <select id="wallet-select"
+            style="flex: 1; padding: 8px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-primary);">
+            <option value="" disabled selected>Select Wallet...</option>
+          </select>
+          <button id="create-wallet-btn" class="secondary-button" style="padding: 8px 16px;">New</button>
+          <button id="export-wallet-btn" class="secondary-button" style="padding: 8px 16px; margin-left: 5px;">Export
+            Key</button>
+        </div>
+      </div>
+    </div>
+
     <div class="chat-container">
       <div class="chat-messages" id="chatMessages">
         <div class="message assistant">
           <div class="message-avatar">🤖</div>
           <div class="message-content">
-            <p>Hello! I'm your Coinbase AgentKit wallet assistant. I can help you manage your wallet, check balances, transfer tokens, and more.</p>
+            <p>Hello! I'm your Coinbase AgentKit wallet assistant. I can help you manage your wallet, check balances,
+              transfer tokens, and more.</p>
             <p>Try asking me: "What's my wallet address?" or "What's my balance?"</p>
           </div>
         </div>
@@ -44,11 +66,8 @@
 
       <div class="chat-input-container">
         <div class="input-wrapper">
-          <textarea 
-            id="messageInput" 
-            placeholder="Type your message here... (Press Enter to send, Shift+Enter for new line)"
-            rows="1"
-          ></textarea>
+          <textarea id="messageInput"
+            placeholder="Type your message here... (Press Enter to send, Shift+Enter for new line)" rows="1"></textarea>
           <button id="sendButton" class="send-button">
             <span>Send</span>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -66,5 +85,5 @@
 
   <script src="app.js"></script>
 </body>
-</html>
 
+</html>

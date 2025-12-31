@@ -6,11 +6,11 @@
 process.on('unhandledRejection', (reason: any) => {
   const errorCode = reason?.cause?.code || reason?.code;
   const errorMessage = reason?.message || String(reason);
-  
-  if (errorCode === 'UND_ERR_CONNECT_TIMEOUT' || 
-      errorMessage.includes('fetch failed') ||
-      errorMessage.includes('analytics') ||
-      errorMessage.includes('Connect Timeout')) {
+
+  if (errorCode === 'UND_ERR_CONNECT_TIMEOUT' ||
+    errorMessage.includes('fetch failed') ||
+    errorMessage.includes('analytics') ||
+    errorMessage.includes('Connect Timeout')) {
     console.warn('[AgentKit] Analytics request failed (ignored)');
     return;
   }
@@ -20,11 +20,11 @@ process.on('unhandledRejection', (reason: any) => {
 process.on('uncaughtException', (error: any) => {
   const errorCode = error?.cause?.code || error?.code;
   const errorMessage = error?.message || String(error);
-  
-  if (errorCode === 'UND_ERR_CONNECT_TIMEOUT' || 
-      errorMessage.includes('fetch failed') ||
-      errorMessage.includes('analytics') ||
-      errorMessage.includes('Connect Timeout')) {
+
+  if (errorCode === 'UND_ERR_CONNECT_TIMEOUT' ||
+    errorMessage.includes('fetch failed') ||
+    errorMessage.includes('analytics') ||
+    errorMessage.includes('Connect Timeout')) {
     console.warn('[AgentKit] Analytics error caught (ignored)');
     return;
   }
@@ -40,6 +40,8 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { config, validateConfig } from './config.js';
 import { CoinbaseAgent } from './agent.js';
+import { walletManager } from './wallet-manager.js';
+import { privateKeyToAccount } from 'viem/accounts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -235,6 +237,125 @@ app.post('/api/clear', async (req: Request, res: Response) => {
       success: false,
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+});
+
+/**
+ * List wallets
+ */
+app.get('/api/wallets', (req: Request, res: Response) => {
+  try {
+    const wallets = walletManager.listWallets();
+
+    // Add env wallet if available
+    if (config.privateKey) {
+      try {
+        let pk = config.privateKey;
+        if (!pk.startsWith('0x')) {
+          pk = `0x${pk}`;
+        }
+        const account = privateKeyToAccount(pk as `0x${string}`);
+        wallets.unshift({
+          id: 'env',
+          alias: 'Environment Wallet',
+          address: account.address,
+          networkId: config.networkId || 'base-sepolia'
+        });
+      } catch (e) {
+        console.warn('Failed to parse env private key:', e);
+      }
+    }
+
+    res.json({ success: true, wallets });
+  } catch (error) {
+    res.status(500).json({ success: false, error: String(error) });
+  }
+});
+
+/**
+ * Create wallet
+ */
+app.post('/api/wallets', (req: Request, res: Response) => {
+  try {
+    const { alias } = req.body;
+    if (!alias) {
+      return res.status(400).json({ success: false, error: 'Alias is required' });
+    }
+    const wallet = walletManager.createWallet(alias);
+    res.json({ success: true, wallet });
+  } catch (error) {
+    res.status(500).json({ success: false, error: String(error) });
+  }
+});
+
+/**
+ * Switch wallet
+ */
+app.post('/api/wallets/switch', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Wallet ID is required' });
+    }
+
+    let privateKey: string;
+
+    if (id === 'env') {
+      if (!config.privateKey) {
+        return res.status(400).json({ success: false, error: 'Environment private key not found' });
+      }
+      privateKey = config.privateKey;
+    } else {
+      const wallet = walletManager.getWallet(id);
+      if (!wallet) {
+        return res.status(404).json({ success: false, error: 'Wallet not found' });
+      }
+      privateKey = wallet.privateKey;
+    }
+
+    if (!privateKey.startsWith('0x')) {
+      privateKey = `0x${privateKey}`;
+    }
+
+    // Initialize agent with new key
+    agent = new CoinbaseAgent();
+    walletInfo = await agent.initialize(privateKey);
+    agentInitialized = true;
+
+    res.json({ success: true, wallet: walletInfo });
+  } catch (error) {
+    res.status(500).json({ success: false, error: String(error) });
+  }
+});
+
+/**
+ * Export private key
+ */
+app.post('/api/wallets/export', (req: Request, res: Response) => {
+  try {
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Wallet ID is required' });
+    }
+
+    let privateKey: string;
+
+    if (id === 'env') {
+      if (!config.privateKey) {
+        return res.status(400).json({ success: false, error: 'Environment private key not found' });
+      }
+      privateKey = config.privateKey;
+    } else {
+      const wallet = walletManager.getWallet(id);
+      if (!wallet) {
+        return res.status(404).json({ success: false, error: 'Wallet not found' });
+      }
+      privateKey = wallet.privateKey;
+    }
+
+    res.json({ success: true, privateKey });
+  } catch (error) {
+    res.status(500).json({ success: false, error: String(error) });
   }
 });
 
