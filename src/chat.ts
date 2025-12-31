@@ -36,7 +36,9 @@ async function main() {
     const llmInfo =
       config.llmProvider === 'groq'
         ? `Groq (${config.groqModel})`
-        : `OpenAI (${config.openaiModel})`;
+        : config.llmProvider === 'alibaba'
+          ? `Alibaba Cloud (${config.dashscopeModel})`
+          : `OpenAI (${config.openaiModel})`;
 
     console.log(chalk.cyan(`\n🧠 LLM: ${llmInfo}`));
     console.log(chalk.green(`📍 Wallet: ${walletInfo.address}`));

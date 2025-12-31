@@ -72,12 +72,21 @@ Remember: You're not just executing commands, you're helping a person understand
 function createLLM(): BaseChatModel {
   // Clamp temperature between 0 and 2
   const temperature = Math.max(0, Math.min(2, config.temperature));
-  
+
   if (config.llmProvider === 'groq') {
     return new ChatGroq({
       model: config.groqModel,
       apiKey: config.groqApiKey,
       temperature: temperature, // Configurable temperature for natural conversations
+    });
+  } else if (config.llmProvider === 'alibaba') {
+    return new ChatOpenAI({
+      modelName: config.dashscopeModel,
+      openAIApiKey: config.dashscopeApiKey,
+      temperature: temperature,
+      configuration: {
+        baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      }
     });
   } else {
     return new ChatOpenAI({
@@ -109,10 +118,10 @@ export class CoinbaseAgent {
   async initialize(): Promise<{ address: string; network: string }> {
     // Create account from private key
     const account = privateKeyToAccount(config.privateKey as `0x${string}`);
-    
+
     // Get chain config
     const chain = config.networkId === 'base' ? base : baseSepolia;
-    
+
     // Create Viem wallet client
     const walletClient = createWalletClient({
       account,
@@ -161,7 +170,7 @@ export class CoinbaseAgent {
     for (const tc of toolCalls) {
       try {
         const result = JSON.parse(tc.result);
-        
+
         // Handle transaction results
         if (tc.name.includes('transfer') || tc.name.includes('native_transfer')) {
           const hash = result.transactionHash || result.hash || result.txHash || '';
@@ -188,11 +197,11 @@ export class CoinbaseAgent {
           const hashMatch = resultStr.match(/0x[a-fA-F0-9]{64}/);
           const addressMatch = resultStr.match(/0x[a-fA-F0-9]{40}/);
           const amountMatch = resultStr.match(/(\d+\.?\d*)\s*ETH/);
-          
+
           const hash = hashMatch ? hashMatch[0] : '';
           const address = addressMatch ? addressMatch[0] : '';
           const amount = amountMatch ? amountMatch[1] : '';
-          
+
           if (amount && address) {
             messages.push(`✅ 转账成功！已发送 ${amount} ETH 到地址 ${address.slice(0, 6)}...${address.slice(-4)}`);
           }
@@ -229,7 +238,7 @@ export class CoinbaseAgent {
       }
       return result;
     }
-    
+
     // Format object results
     if (typeof result === 'object' && result !== null) {
       // Format wallet details
@@ -243,16 +252,16 @@ export class CoinbaseAgent {
           network: network,
         }, null, 2);
       }
-      
+
       // Format balance results for better readability
       if (toolName.includes('balance')) {
         return JSON.stringify(result, null, 2);
       }
-      
+
       // Default: pretty-print JSON
       return JSON.stringify(result, null, 2);
     }
-    
+
     return String(result);
   }
 
@@ -318,13 +327,13 @@ export class CoinbaseAgent {
               }
             })
             .join('\n');
-          
+
           // Add tool results as an AI message (tool execution result)
           // Use a specific format that tells LLM this is a tool result that needs to be converted to friendly response
           this.conversationHistory.push(
             new AIMessage(`Tool execution completed. Results:\n${toolResultsText}`)
           );
-          
+
           // Continue loop to let LLM generate friendly response
           continue;
         }
@@ -336,9 +345,9 @@ export class CoinbaseAgent {
             : JSON.stringify(response.content);
 
         // Check if content is just repeating tool results (which means LLM didn't generate friendly response)
-        const isRawToolOutput = allToolCalls.length > 0 && 
+        const isRawToolOutput = allToolCalls.length > 0 &&
           allToolCalls.some(tc => content.includes(tc.result) || content.includes(`Tool "${tc.name}"`));
-        
+
         if (isRawToolOutput && content.length < 200) {
           // LLM didn't generate friendly response, create one based on tool results
           const friendlyMessage = this.generateFriendlyMessageFromToolResults(allToolCalls);
@@ -358,35 +367,35 @@ export class CoinbaseAgent {
       }
 
       // Max iterations reached - generate friendly message from tool results
-      const friendlyMessage = allToolCalls.length > 0 
+      const friendlyMessage = allToolCalls.length > 0
         ? this.generateFriendlyMessageFromToolResults(allToolCalls)
         : '我处理了你的请求，但遇到了一些问题。请重试。';
-      
+
       return {
         message: friendlyMessage,
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      
+
       // Generate a friendly error message using LLM
       try {
         const errorContext = this.conversationHistory.slice(0, -1); // Remove the user message
         const errorPrompt = `The user's request failed with this error: "${errorMsg}". 
 Please provide a friendly, helpful explanation of what went wrong and suggest what the user can do next. 
 Be empathetic and supportive. Respond in the same language as the user's message: "${userMessage}"`;
-        
+
         const errorResponse = await this.llm.invoke([
           ...errorContext,
           new SystemMessage('You are a helpful assistant. Explain errors in a friendly way.'),
           new HumanMessage(errorPrompt),
         ]);
-        
+
         const friendlyErrorMsg =
           typeof errorResponse.content === 'string'
             ? errorResponse.content
             : `I encountered an error: ${errorMsg}. Let me help you resolve this.`;
-        
+
         this.conversationHistory.push(new AIMessage(friendlyErrorMsg));
         return { message: friendlyErrorMsg };
       } catch {

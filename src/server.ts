@@ -2,6 +2,36 @@
  * Express server for Coinbase AgentKit Web UI
  */
 
+// Global error handlers for analytics timeouts (must be before any imports that trigger analytics)
+process.on('unhandledRejection', (reason: any) => {
+  const errorCode = reason?.cause?.code || reason?.code;
+  const errorMessage = reason?.message || String(reason);
+  
+  if (errorCode === 'UND_ERR_CONNECT_TIMEOUT' || 
+      errorMessage.includes('fetch failed') ||
+      errorMessage.includes('analytics') ||
+      errorMessage.includes('Connect Timeout')) {
+    console.warn('[AgentKit] Analytics request failed (ignored)');
+    return;
+  }
+  console.error('Unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (error: any) => {
+  const errorCode = error?.cause?.code || error?.code;
+  const errorMessage = error?.message || String(error);
+  
+  if (errorCode === 'UND_ERR_CONNECT_TIMEOUT' || 
+      errorMessage.includes('fetch failed') ||
+      errorMessage.includes('analytics') ||
+      errorMessage.includes('Connect Timeout')) {
+    console.warn('[AgentKit] Analytics error caught (ignored)');
+    return;
+  }
+  console.error('Uncaught exception:', error);
+  process.exit(1);
+});
+
 // Note: If you see TypeScript errors here, run: npm install --save-dev @types/express
 // @ts-ignore - Express types work at runtime even if @types/express is not installed
 import express, { Request, Response } from 'express';
@@ -116,6 +146,67 @@ app.post('/api/chat', async (req: Request, res: Response) => {
       success: true,
       message: response.message,
       toolCalls: response.toolCalls,
+      pendingTransaction: response.pendingTransaction,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+/**
+ * Confirm pending transaction
+ */
+app.post('/api/confirm', async (req: Request, res: Response) => {
+  try {
+    if (!agent) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent not initialized',
+      });
+    }
+
+    if (!agent.hasPendingTransaction()) {
+      return res.status(400).json({
+        success: false,
+        error: 'No pending transaction',
+      });
+    }
+
+    const response = await agent.confirmTransaction();
+
+    res.json({
+      success: true,
+      message: response.message,
+      toolCalls: response.toolCalls,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+/**
+ * Cancel pending transaction
+ */
+app.post('/api/cancel', async (req: Request, res: Response) => {
+  try {
+    if (!agent) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent not initialized',
+      });
+    }
+
+    const response = agent.cancelTransaction();
+
+    res.json({
+      success: true,
+      message: response.message,
     });
   } catch (error) {
     res.status(500).json({

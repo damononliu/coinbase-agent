@@ -6,6 +6,7 @@ const API_BASE = '';
 
 let isInitialized = false;
 let isProcessing = false;
+let hasPendingTransaction = false;
 
 // DOM elements
 const statusElement = document.getElementById('status');
@@ -148,6 +149,98 @@ function removeLoadingMessage() {
   }
 }
 
+/**
+ * Add transaction confirmation buttons to a message
+ */
+function addTransactionConfirmation(messageDiv) {
+  hasPendingTransaction = true;
+  
+  const confirmDiv = document.createElement('div');
+  confirmDiv.className = 'transaction-confirm';
+  confirmDiv.id = 'transaction-confirm';
+  
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'confirm-btn';
+  confirmBtn.textContent = '✅ 确认执行';
+  confirmBtn.onclick = confirmTransaction;
+  
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'cancel-btn';
+  cancelBtn.textContent = '❌ 取消';
+  cancelBtn.onclick = cancelTransaction;
+  
+  confirmDiv.appendChild(confirmBtn);
+  confirmDiv.appendChild(cancelBtn);
+  
+  messageDiv.querySelector('.message-content').appendChild(confirmDiv);
+}
+
+/**
+ * Confirm pending transaction
+ */
+async function confirmTransaction() {
+  if (!hasPendingTransaction || isProcessing) return;
+  
+  isProcessing = true;
+  const confirmDiv = document.getElementById('transaction-confirm');
+  if (confirmDiv) {
+    confirmDiv.innerHTML = '<span class="loading"></span> 正在执行交易...';
+  }
+  
+  try {
+    const response = await fetch(`${API_BASE}/api/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    const data = await response.json();
+    
+    if (confirmDiv) {
+      confirmDiv.remove();
+    }
+    
+    hasPendingTransaction = false;
+    addMessage('assistant', data.message, data.toolCalls);
+  } catch (error) {
+    console.error('Error confirming transaction:', error);
+    if (confirmDiv) {
+      confirmDiv.innerHTML = `<p class="error-message">确认失败: ${error.message}</p>`;
+    }
+  } finally {
+    isProcessing = false;
+  }
+}
+
+/**
+ * Cancel pending transaction
+ */
+async function cancelTransaction() {
+  if (!hasPendingTransaction || isProcessing) return;
+  
+  isProcessing = true;
+  
+  try {
+    const response = await fetch(`${API_BASE}/api/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    const data = await response.json();
+    
+    const confirmDiv = document.getElementById('transaction-confirm');
+    if (confirmDiv) {
+      confirmDiv.remove();
+    }
+    
+    hasPendingTransaction = false;
+    addMessage('assistant', data.message);
+  } catch (error) {
+    console.error('Error cancelling transaction:', error);
+  } finally {
+    isProcessing = false;
+  }
+}
+
 async function sendMessage() {
   const message = messageInput.value.trim();
   if (!message || isProcessing || !isInitialized) {
@@ -185,8 +278,37 @@ async function sendMessage() {
 
     const data = await response.json();
     
+    // Check if there's a pending transaction requiring confirmation
+    if (data.pendingTransaction) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message assistant transaction-pending';
+      const avatar = document.createElement('div');
+      avatar.className = 'message-avatar';
+      avatar.textContent = '🤖';
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'message-content';
+      
+      // Parse markdown-like content
+      const lines = data.message.split('\n');
+      lines.forEach(line => {
+        if (line.trim()) {
+          const p = document.createElement('p');
+          // Simple markdown parsing for bold
+          p.innerHTML = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+          contentDiv.appendChild(p);
+        }
+      });
+      
+      messageDiv.appendChild(avatar);
+      messageDiv.appendChild(contentDiv);
+      chatMessages.appendChild(messageDiv);
+      
+      // Add confirmation buttons
+      addTransactionConfirmation(messageDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
     // Check if it's an error message
-    if (data.message.startsWith('Error:')) {
+    else if (data.message.startsWith('Error:')) {
       const errorP = document.createElement('p');
       errorP.className = 'error-message';
       errorP.textContent = data.message;
