@@ -10,6 +10,7 @@ import {
   walletActionProvider,
   erc20ActionProvider,
 } from '@coinbase/agentkit';
+import { uniswapActionProvider } from './action-providers/uniswap.js';
 import { getLangChainTools } from '@coinbase/agentkit-langchain';
 import { ChatGroq } from '@langchain/groq';
 import { ChatOpenAI } from '@langchain/openai';
@@ -141,10 +142,12 @@ export class CoinbaseAgent {
     // Create AgentKit with action providers
     this.agentKit = await AgentKit.from({
       walletProvider,
+      // 能力边界，和 Langchain 兼容
       actionProviders: [
         wethActionProvider(),
         walletActionProvider(),
         erc20ActionProvider(),
+        uniswapActionProvider(),
       ],
     });
 
@@ -157,9 +160,14 @@ export class CoinbaseAgent {
     // Get wallet address
     this.walletAddress = walletProvider.getAddress();
 
+    // Get balance
+    const balance = await walletProvider.getBalance();
+    const balanceStr = (Number(balance) / 1e18).toFixed(4);
+
     return {
       address: this.walletAddress,
       network: config.networkId,
+      balance: balanceStr,
     };
   }
 
@@ -296,8 +304,10 @@ export class CoinbaseAgent {
 
           // Execute all tool calls
           for (const toolCall of response.tool_calls) {
+            // 关键点：代码会在 this.tools 列表里查找是否有这个工具
             const tool = this.tools.find((t) => t.name === toolCall.name);
             if (tool) {
+              // 只有找到了，才会执行
               try {
                 const result = await tool.invoke(toolCall.args || {});
                 const formattedResult = this.formatToolResult(toolCall.name, result);

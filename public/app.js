@@ -49,6 +49,7 @@ async function init() {
       updateStatus('connected', 'Connected');
       updateWalletInfo(data.wallet, data.llmProvider);
       isInitialized = true;
+      fetchWallets();
     }
   } catch (error) {
     console.error('Initialization error:', error);
@@ -68,6 +69,7 @@ function updateStatus(type, text) {
 
 function updateWalletInfo(wallet, provider) {
   walletAddress.textContent = wallet.address;
+  document.getElementById('walletBalance').textContent = `${wallet.balance} ETH`;
   network.textContent = wallet.network;
   llmProvider.textContent = provider || 'groq';
   walletInfo.style.display = 'flex';
@@ -521,12 +523,51 @@ async function handleExportWallet() {
   }
 }
 
+async function handleDeleteWallet() {
+  const select = document.getElementById('wallet-select');
+  const walletId = select.value;
+
+  if (!walletId) {
+    alert('Please select a wallet first.');
+    return;
+  }
+
+  if (walletId === 'env') {
+    alert('Cannot delete the Environment Wallet.');
+    return;
+  }
+
+  if (!confirm('Are you sure you want to DELETE this wallet? This cannot be undone.')) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/wallets/${walletId}`, {
+      method: 'DELETE',
+    });
+
+    const data = await response.json();
+    if (data.success) {
+      alert('Wallet deleted.');
+      // If we deleted the active wallet (which is likely if its selected), we might want to switch to env or warn.
+      // But for now just refresh list.
+      fetchWallets();
+    } else {
+      alert('Failed to delete wallet: ' + data.error);
+    }
+  } catch (error) {
+    console.error(error);
+    alert('Error deleting wallet: ' + error.message);
+  }
+}
+
 messageInput.addEventListener('input', adjustTextareaHeight);
 
 clearButton.addEventListener('click', clearHistory);
 document.getElementById('wallet-select').addEventListener('change', handleWalletSwitch);
 document.getElementById('create-wallet-btn').addEventListener('click', handleCreateWallet);
 document.getElementById('export-wallet-btn').addEventListener('click', handleExportWallet);
+document.getElementById('delete-wallet-btn').addEventListener('click', handleDeleteWallet);
 
 // Initialize on load
 init();

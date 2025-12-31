@@ -56,7 +56,7 @@ app.use(express.static(path.join(__dirname, '../public')));
 // Agent instance (singleton)
 let agent: CoinbaseAgent | null = null;
 let agentInitialized = false;
-let walletInfo: { address: string; network: string } | null = null;
+let walletInfo: { address: string; network: string; balance: string } | null = null;
 
 /**
  * Initialize agent
@@ -354,6 +354,31 @@ app.post('/api/wallets/export', (req: Request, res: Response) => {
     }
 
     res.json({ success: true, privateKey });
+  } catch (error) {
+    res.status(500).json({ success: false, error: String(error) });
+  }
+});
+
+/**
+ * Delete wallet
+ */
+app.delete('/api/wallets/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Wallet ID is required' });
+    }
+
+    if (id === 'env') {
+      return res.status(403).json({ success: false, error: 'Cannot delete environment wallet' });
+    }
+
+    const deleted = walletManager.deleteWallet(id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Wallet not found' });
+    }
+
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: String(error) });
   }
