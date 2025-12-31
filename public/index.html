@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Coinbase AgentKit Wallet Agent</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🤖 Coinbase AgentKit Wallet Agent</h1>
+      <div class="status" id="status">
+        <span class="status-dot"></span>
+        <span id="statusText">Initializing...</span>
+      </div>
+    </header>
+
+    <div class="wallet-info" id="walletInfo" style="display: none;">
+      <div class="info-item">
+        <span class="label">📍 Wallet:</span>
+        <span class="value" id="walletAddress">-</span>
+      </div>
+      <div class="info-item">
+        <span class="label">🔗 Network:</span>
+        <span class="value" id="network">-</span>
+      </div>
+      <div class="info-item">
+        <span class="label">🧠 LLM:</span>
+        <span class="value" id="llmProvider">-</span>
+      </div>
+    </div>
+
+    <div class="chat-container">
+      <div class="chat-messages" id="chatMessages">
+        <div class="message assistant">
+          <div class="message-avatar">🤖</div>
+          <div class="message-content">
+            <p>Hello! I'm your Coinbase AgentKit wallet assistant. I can help you manage your wallet, check balances, transfer tokens, and more.</p>
+            <p>Try asking me: "What's my wallet address?" or "What's my balance?"</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-input-container">
+        <div class="input-wrapper">
+          <textarea 
+            id="messageInput" 
+            placeholder="Type your message here... (Press Enter to send, Shift+Enter for new line)"
+            rows="1"
+          ></textarea>
+          <button id="sendButton" class="send-button">
+            <span>Send</span>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+        <div class="input-actions">
+          <button id="clearButton" class="secondary-button">Clear History</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
