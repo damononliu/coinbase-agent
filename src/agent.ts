@@ -47,7 +47,12 @@ You have access to various blockchain tools including:
 - When showing numbers (balances, amounts), format them in a human-readable way (e.g., "0.5 ETH" instead of "500000000000000000")
 
 **Important Guidelines:**
-1. **Transaction Safety:** Always confirm transaction details clearly with the user before executing any transactions. Show amounts, recipient addresses, and estimated gas costs in a clear format.
+1. **Transaction Safety & User Confirmation:** 
+   - CRITICAL: When the user requests a transaction (transfer, swap, wrap, etc.), you MUST use the appropriate tool to prepare the transaction.
+   - The system will automatically pause and ask for user confirmation before executing any transaction involving funds.
+   - DO NOT execute transactions directly - let the confirmation system handle it.
+   - Always explain what the transaction will do in clear, user-friendly language.
+   - Show amounts, recipient addresses, and any relevant details clearly.
 
 2. **Error Handling:** When something goes wrong, explain what happened in plain language and suggest what the user can do next. Don't just show raw error messages.
 
@@ -57,8 +62,9 @@ You have access to various blockchain tools including:
 
 5. **Tool Results:** CRITICAL: When you see "Tool execution completed. Results:" in the conversation, you MUST respond with a friendly, natural message to the user. DO NOT repeat the raw tool output. Convert technical results into human-friendly language. Examples:
    - Transaction result → "✅ 转账成功！已发送 0.001 ETH 到地址 0x8f04...113a4。交易哈希: 0x9b6d5b..."
-   - Balance result → "💰 你的余额: 0.5 ETH"
-   - Address result → "📍 你的钱包地址: 0x1234...abcd"
+   - Balance result → "💰 余额: 0.5 ETH" (ONLY show the balance, no technical details like WEI, Chain ID, Provider, etc.)
+   - Address result → "📍 钱包地址: 0x1234...abcd" (only when user explicitly asks for address)
+   - **IMPORTANT for balance queries:** Keep it simple - just show the ETH balance. Do NOT include WEI values, network technical details, provider information, or any other technical metadata.
    - Always celebrate successes with the user!
 
 6. **Context Awareness:** Remember previous conversation context and refer back to it when relevant.
@@ -101,12 +107,30 @@ function createLLM(): BaseChatModel {
 /**
  * Coinbase AgentKit Agent
  */
+// 需要用户确认的交易操作
+const TRANSACTION_REQUIRING_CONFIRMATION = [
+  'native_transfer',
+  'erc20_transfer',
+  'uniswap_swap',
+  'wrap_eth',
+  'unwrap_eth',
+];
+
+// 待确认交易信息
+interface PendingTransaction {
+  toolName: string;
+  toolArgs: any;
+  description: string;
+  estimatedGas?: string;
+}
+
 export class CoinbaseAgent {
   private agentKit: AgentKit | null = null;
   private llm: BaseChatModel;
   private tools: StructuredTool[] = [];
   private conversationHistory: (HumanMessage | AIMessage | SystemMessage)[] = [];
   private walletAddress: string = '';
+  private pendingTransaction: PendingTransaction | null = null;
 
   constructor() {
     this.llm = createLLM();
@@ -116,7 +140,7 @@ export class CoinbaseAgent {
   /**
    * Initialize the AgentKit with local wallet
    */
-  async initialize(privateKey?: string): Promise<{ address: string; network: string }> {
+  async initialize(privateKey?: string): Promise<{ address: string; network: string; balance?: string }> {
     // Use provided key or fallback to config
     const pk = privateKey || config.privateKey;
     if (!pk) {
@@ -192,12 +216,28 @@ export class CoinbaseAgent {
           const amount = result.amount || result.value || '';
           messages.push(`✅ 转账成功！已发送 ${amount} ETH 到地址 ${to.slice(0, 6)}...${to.slice(-4)}。交易哈希: ${hash.slice(0, 10)}...${hash.slice(-8)}`);
         }
-        // Handle balance/address queries
-        else if (tc.name.includes('balance') || tc.name.includes('wallet')) {
-          const balance = result.balance || result.ethBalance || '';
-          const address = result.address || result.walletAddress || '';
-          if (balance) messages.push(`💰 你的余额: ${balance} ETH`);
-          if (address) messages.push(`📍 钱包地址: ${address.slice(0, 6)}...${address.slice(-4)}`);
+        // Handle balance/address queries - 简化显示
+        else if (tc.name.includes('balance') || tc.name.includes('wallet') || tc.name.includes('get_wallet')) {
+          // 提取 ETH 余额（优先使用格式化的值）
+          let balance = result.balance || result.ethBalance || '';
+          if (!balance && result.nativeBalance) {
+            // 从 nativeBalance 字符串中提取 ETH 值
+            if (typeof result.nativeBalance === 'string') {
+              const match = result.nativeBalance.match(/([\d.]+)\s*ETH/);
+              if (match) {
+                balance = parseFloat(match[1]).toFixed(4);
+              }
+            }
+          }
+          
+          // 只显示余额，不显示地址（除非用户明确询问地址）
+          if (balance) {
+            // 清理余额格式（移除 "ETH" 后缀如果已存在）
+            const cleanBalance = balance.replace(/\s*ETH\s*/gi, '');
+            messages.push(`💰 余额: ${cleanBalance} ETH`);
+          } else {
+            messages.push(`💰 余额: 0 ETH`);
+          }
         }
         // Handle other results
         else {
@@ -206,7 +246,21 @@ export class CoinbaseAgent {
       } catch {
         // Not JSON, try to extract meaningful info from string
         const resultStr = tc.result;
-        if (resultStr.includes('Transaction') || resultStr.includes('transferred') || resultStr.includes('Transferred')) {
+        
+        // 处理余额查询的字符串结果
+        if (tc.name.includes('balance') || tc.name.includes('wallet') || tc.name.includes('get_wallet')) {
+          // 从字符串中提取 ETH 余额
+          const ethBalanceMatch = resultStr.match(/Native Balance:\s*([\d.]+)\s*ETH/i) || 
+                                  resultStr.match(/([\d.]+)\s*ETH/i);
+          if (ethBalanceMatch) {
+            const balance = parseFloat(ethBalanceMatch[1]).toFixed(4);
+            messages.push(`💰 余额: ${balance} ETH`);
+          } else {
+            messages.push(`💰 余额: 0 ETH`);
+          }
+        }
+        // 处理交易结果
+        else if (resultStr.includes('Transaction') || resultStr.includes('transferred') || resultStr.includes('Transferred')) {
           // Extract transaction hash
           const hashMatch = resultStr.match(/0x[a-fA-F0-9]{64}/);
           const addressMatch = resultStr.match(/0x[a-fA-F0-9]{40}/);
@@ -255,21 +309,61 @@ export class CoinbaseAgent {
 
     // Format object results
     if (typeof result === 'object' && result !== null) {
-      // Format wallet details
+      // Format wallet details - 只显示关键信息
       if (toolName === 'get_wallet_details' || toolName === 'getWalletDetails') {
+        // 提取 ETH 余额（优先使用格式化的 ETH 值，如果没有则从 WEI 转换）
+        let balance = result.balance || result.ethBalance || '';
+        if (!balance && result.nativeBalance) {
+          // 如果只有 WEI，尝试从字符串中提取 ETH 值
+          const ethMatch = String(result.nativeBalance).match(/Native Balance: ([\d.]+) ETH/);
+          if (ethMatch) {
+            balance = parseFloat(ethMatch[1]).toFixed(4);
+          } else if (typeof result.nativeBalance === 'string' && result.nativeBalance.includes('ETH')) {
+            // 从字符串中提取 ETH 值
+            const match = result.nativeBalance.match(/([\d.]+)\s*ETH/);
+            if (match) {
+              balance = parseFloat(match[1]).toFixed(4);
+            }
+          }
+        }
+        
         const address = result.address || result.walletAddress || '';
-        const balance = result.balance || result.ethBalance || '0';
-        const network = result.network || config.networkId;
+        // 简化网络显示
+        let network = result.network || config.networkId;
+        if (result.networkId) {
+          network = result.networkId === 'base-sepolia' ? 'Base Sepolia' : 
+                    result.networkId === 'base' ? 'Base' : result.networkId;
+        }
+        
         return JSON.stringify({
           address: address,
-          balance: balance,
+          balance: balance ? `${balance} ETH` : '0 ETH',
           network: network,
         }, null, 2);
       }
 
-      // Format balance results for better readability
-      if (toolName.includes('balance')) {
-        return JSON.stringify(result, null, 2);
+      // Format balance results - 只显示 ETH 余额
+      if (toolName.includes('balance') || toolName.includes('get_balance')) {
+        // 提取 ETH 余额
+        let balance = result.balance || result.ethBalance || '';
+        if (!balance && result.nativeBalance) {
+          // 尝试从 nativeBalance 字符串中提取 ETH 值
+          if (typeof result.nativeBalance === 'string') {
+            const match = result.nativeBalance.match(/([\d.]+)\s*ETH/);
+            if (match) {
+              balance = parseFloat(match[1]).toFixed(4);
+            }
+          }
+        }
+        
+        const address = result.address || result.walletAddress || '';
+        
+        // 只返回关键信息
+        const simplified: any = {};
+        if (address) simplified.address = address;
+        if (balance) simplified.balance = `${balance} ETH`;
+        
+        return JSON.stringify(simplified, null, 2);
       }
 
       // Default: pretty-print JSON
@@ -307,7 +401,28 @@ export class CoinbaseAgent {
             // 关键点：代码会在 this.tools 列表里查找是否有这个工具
             const tool = this.tools.find((t) => t.name === toolCall.name);
             if (tool) {
-              // 只有找到了，才会执行
+              // 检查是否需要用户确认
+              const requiresConfirmation = TRANSACTION_REQUIRING_CONFIRMATION.some(
+                (name) => toolCall.name.includes(name)
+              );
+
+              if (requiresConfirmation && !this.pendingTransaction) {
+                // 需要确认的交易，先暂停执行
+                const description = this.generateTransactionDescription(toolCall.name, toolCall.args || {});
+                this.pendingTransaction = {
+                  toolName: toolCall.name,
+                  toolArgs: toolCall.args || {},
+                  description,
+                };
+
+                // 返回待确认的交易信息，不执行
+                return {
+                  message: `⚠️ 检测到需要确认的交易操作：\n\n${description}\n\n请确认是否执行此交易。`,
+                  pendingTransaction: this.pendingTransaction,
+                };
+              }
+
+              // 不需要确认的操作，直接执行
               try {
                 const result = await tool.invoke(toolCall.args || {});
                 const formattedResult = this.formatToolResult(toolCall.name, result);
@@ -334,12 +449,28 @@ export class CoinbaseAgent {
           }
 
           // Format tool results for LLM to understand
+          // 对于余额查询，简化输出
           const toolResultsText = toolResults
             .map((r) => {
               try {
                 const parsed = JSON.parse(r.result);
+                // 如果是余额查询，只返回关键信息
+                if (r.name.includes('balance') || r.name.includes('wallet') || r.name.includes('get_wallet')) {
+                  const simplified: any = {};
+                  if (parsed.balance) simplified.balance = parsed.balance;
+                  if (parsed.address && !r.name.includes('balance')) simplified.address = parsed.address; // 只在非余额查询时显示地址
+                  if (parsed.network && !r.name.includes('balance')) simplified.network = parsed.network; // 只在非余额查询时显示网络
+                  return JSON.stringify(simplified, null, 2);
+                }
                 return JSON.stringify(parsed, null, 2);
               } catch {
+                // 对于字符串结果，如果是余额查询，尝试提取关键信息
+                if (r.name.includes('balance') || r.name.includes('wallet') || r.name.includes('get_wallet')) {
+                  const ethMatch = r.result.match(/([\d.]+)\s*ETH/i);
+                  if (ethMatch) {
+                    return JSON.stringify({ balance: `${parseFloat(ethMatch[1]).toFixed(4)} ETH` }, null, 2);
+                  }
+                }
                 return r.result;
               }
             })
@@ -439,23 +570,115 @@ Be empathetic and supportive. Respond in the same language as the user's message
   }
 
   /**
+   * Generate human-readable transaction description
+   */
+  private generateTransactionDescription(toolName: string, args: any): string {
+    if (toolName.includes('native_transfer')) {
+      return `💰 ETH 转账
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+接收地址: ${args.to || args.recipient || 'N/A'}
+转账金额: ${args.amount || args.value || 'N/A'} ETH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    } else if (toolName.includes('erc20_transfer')) {
+      return `🪙 ERC20 代币转账
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+代币地址: ${args.tokenAddress || args.token || 'N/A'}
+接收地址: ${args.to || args.recipient || 'N/A'}
+转账数量: ${args.amount || args.value || 'N/A'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    } else if (toolName.includes('uniswap_swap')) {
+      return `🔄 Uniswap 代币交换
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+从: ${args.tokenIn || 'N/A'}
+到: ${args.tokenOut || 'N/A'}
+数量: ${args.amount || 'N/A'}
+滑点容忍度: ${args.slippage || 0.5}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    } else if (toolName.includes('wrap_eth')) {
+      return `📦 包装 ETH 为 WETH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ETH 数量: ${args.amount || args.value || 'N/A'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    } else if (toolName.includes('unwrap_eth')) {
+      return `📦 解包 WETH 为 ETH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WETH 数量: ${args.amount || args.value || 'N/A'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    }
+    return `交易操作: ${toolName}\n参数: ${JSON.stringify(args, null, 2)}`;
+  }
+
+  /**
    * Check if there is a pending transaction requiring confirmation
    */
   hasPendingTransaction(): boolean {
-    return false;
+    return this.pendingTransaction !== null;
   }
 
   /**
    * Confirm and execute the pending transaction
    */
   async confirmTransaction(): Promise<{ message: string; toolCalls?: any[] }> {
-    return { message: "No pending transaction to confirm." };
+    if (!this.pendingTransaction) {
+      return { message: "没有待确认的交易。" };
+    }
+
+    const { toolName, toolArgs } = this.pendingTransaction;
+    const tool = this.tools.find((t) => t.name === toolName);
+
+    if (!tool) {
+      this.pendingTransaction = null;
+      return { message: "找不到对应的交易工具。" };
+    }
+
+    try {
+      // 执行交易
+      const result = await tool.invoke(toolArgs);
+      const formattedResult = this.formatToolResult(toolName, result);
+
+      // 清除待确认交易
+      const pendingTx = this.pendingTransaction;
+      this.pendingTransaction = null;
+
+      // 添加执行结果到对话历史
+      this.conversationHistory.push(
+        new AIMessage(`交易已确认并执行。结果: ${formattedResult}`)
+      );
+
+      return {
+        message: `✅ 交易已确认并执行成功！\n\n${formattedResult}`,
+        toolCalls: [{
+          name: toolName,
+          result: formattedResult,
+        }],
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.pendingTransaction = null;
+      return {
+        message: `❌ 交易执行失败: ${errorMsg}`,
+      };
+    }
   }
 
   /**
    * Cancel the pending transaction
    */
   cancelTransaction(): { message: string } {
-    return { message: "No pending transaction to cancel." };
+    if (!this.pendingTransaction) {
+      return { message: "没有待确认的交易。" };
+    }
+
+    const description = this.pendingTransaction.description;
+    this.pendingTransaction = null;
+
+    // 添加取消信息到对话历史
+    this.conversationHistory.push(
+      new AIMessage("用户取消了交易。")
+    );
+
+    return {
+      message: `❌ 交易已取消。\n\n已取消的交易:\n${description}`,
+    };
   }
 }
