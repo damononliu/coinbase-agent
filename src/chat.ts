@@ -6,7 +6,7 @@
 
 import chalk from 'chalk';
 import ora from 'ora';
-import { input, select } from '@inquirer/prompts';
+import { input, select, confirm } from '@inquirer/prompts';
 import { config, validateConfig } from './config.js';
 import { CoinbaseAgent } from './agent.js';
 import { walletManager } from './wallet-manager.js';
@@ -127,12 +127,48 @@ async function main() {
 
         console.log(chalk.green('\n🤖 Agent:'), response.message, '\n');
 
-        if (response.toolCalls && response.toolCalls.length > 0) {
-          console.log(chalk.dim('Tools used:'));
-          response.toolCalls.forEach((tc) => {
-            console.log(chalk.dim(`  - ${tc.name}`));
-          });
+        // 检查是否有待确认的交易
+        if (response.pendingTransaction) {
+          console.log(chalk.yellow('⚠️  检测到需要确认的交易操作\n'));
+          console.log(chalk.cyan(response.pendingTransaction.description));
           console.log();
+
+          const shouldConfirm = await confirm({
+            message: '是否确认执行此交易？',
+            default: false,
+          });
+
+          if (shouldConfirm) {
+            const confirmSpinner = ora('执行交易中...').start();
+            try {
+              const confirmResponse = await agent.confirmTransaction();
+              confirmSpinner.stop();
+              console.log(chalk.green('\n✅'), confirmResponse.message, '\n');
+
+              if (confirmResponse.toolCalls && confirmResponse.toolCalls.length > 0) {
+                console.log(chalk.dim('交易详情:'));
+                confirmResponse.toolCalls.forEach((tc) => {
+                  console.log(chalk.dim(`  - ${tc.name}: ${tc.result}`));
+                });
+                console.log();
+              }
+            } catch (error) {
+              confirmSpinner.fail('交易执行失败');
+              console.error(chalk.red(`Error: ${error}\n`));
+            }
+          } else {
+            const cancelResponse = agent.cancelTransaction();
+            console.log(chalk.yellow('\n❌'), cancelResponse.message, '\n');
+          }
+        } else {
+          // 正常响应
+          if (response.toolCalls && response.toolCalls.length > 0) {
+            console.log(chalk.dim('Tools used:'));
+            response.toolCalls.forEach((tc) => {
+              console.log(chalk.dim(`  - ${tc.name}`));
+            });
+            console.log();
+          }
         }
       } catch (error) {
         thinkingSpinner.fail('Error');

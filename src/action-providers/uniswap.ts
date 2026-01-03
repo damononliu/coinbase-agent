@@ -40,11 +40,13 @@ export const uniswapActionProvider = () => customActionProvider<EvmWalletProvide
             tokenIn: z.string().describe('The token symbol or address to swap FROM (e.g. ETH, USDC)'),
             tokenOut: z.string().describe('The token symbol or address to swap TO (e.g. USDC, ETH)'),
             amount: z.string().describe('The amount of tokenIn to swap (e.g. 0.01, 100)'),
-            slippage: z.number().describe('Slippage tolerance in percentage (default 0.5)').optional(),
+            slippage: z.number().nullable().optional().describe('Slippage tolerance in percentage (default 0.5)'),
         }),
         invoke: async (walletProvider, args) => {
             try {
-                const { tokenIn, tokenOut, amount } = args;
+                const { tokenIn, tokenOut, amount, slippage } = args;
+                // Use default slippage of 0.5% if not provided
+                const slippageTolerance = slippage ?? 0.5;
 
                 // Determine network
                 const networkId = config.networkId === 'base' ? 'base-mainnet' : 'base-sepolia';

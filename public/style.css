@@ -365,6 +365,34 @@ header h1 {
   background: linear-gradient(to right, rgba(245, 158, 11, 0.1), transparent);
 }
 
+.transaction-warning {
+  color: #f59e0b;
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 12px;
+}
+
+.transaction-description {
+  background: #1f2937;
+  color: #f9fafb;
+  padding: 16px;
+  border-radius: 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 12px 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  border: 1px solid #374151;
+}
+
+.transaction-info {
+  color: #6b7280;
+  font-size: 14px;
+  margin-top: 8px;
+  font-style: italic;
+}
+
 .transaction-confirm {
   display: flex;
   gap: 12px;

@@ -287,20 +287,26 @@ async function sendMessage() {
       messageDiv.className = 'message assistant transaction-pending';
       const avatar = document.createElement('div');
       avatar.className = 'message-avatar';
-      avatar.textContent = '🤖';
+      avatar.textContent = '⚠️';
       const contentDiv = document.createElement('div');
       contentDiv.className = 'message-content';
 
-      // Parse markdown-like content
-      const lines = data.message.split('\n');
-      lines.forEach(line => {
-        if (line.trim()) {
-          const p = document.createElement('p');
-          // Simple markdown parsing for bold
-          p.innerHTML = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-          contentDiv.appendChild(p);
-        }
-      });
+      // Display transaction details
+      const warningP = document.createElement('p');
+      warningP.className = 'transaction-warning';
+      warningP.textContent = '⚠️ 检测到需要确认的交易操作';
+      contentDiv.appendChild(warningP);
+
+      // Display transaction description
+      const descP = document.createElement('pre');
+      descP.className = 'transaction-description';
+      descP.textContent = data.pendingTransaction.description || data.message;
+      contentDiv.appendChild(descP);
+
+      const infoP = document.createElement('p');
+      infoP.className = 'transaction-info';
+      infoP.textContent = '请仔细检查交易详情，确认无误后再执行。';
+      contentDiv.appendChild(infoP);
 
       messageDiv.appendChild(avatar);
       messageDiv.appendChild(contentDiv);
