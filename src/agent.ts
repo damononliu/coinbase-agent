@@ -11,6 +11,7 @@ import {
   erc20ActionProvider,
 } from '@coinbase/agentkit';
 import { uniswapActionProvider } from './action-providers/uniswap.js';
+import { walletAddressActionProvider } from './action-providers/wallet-address.js';
 import { getLangChainTools } from '@coinbase/agentkit-langchain';
 import { ChatGroq } from '@langchain/groq';
 import { ChatOpenAI } from '@langchain/openai';
@@ -33,10 +34,16 @@ const SYSTEM_PROMPT = `You are a friendly and knowledgeable blockchain wallet as
 
 **Your Capabilities:**
 You have access to various blockchain tools including:
+- **get_wallet_address**: Get the current wallet address (use this when user asks for their address)
+- **get_wallet_details**: Get wallet address, balance, and network info (use when user asks for wallet details)
 - Wallet management (check address, view balances, transfer funds)
 - ERC20 token operations (send tokens, check token balances)
 - WETH wrapping/unwrapping (convert between ETH and WETH)
 - And more blockchain operations
+
+**Available Tools:**
+- get_wallet_address: Returns ONLY the wallet address. Use this when user asks for their address
+- get_wallet_details: Returns address, balance, and network. Use when user asks for wallet info or details
 
 **Current Network:** ${config.networkId}
 
@@ -61,10 +68,18 @@ You have access to various blockchain tools including:
 4. **Transparency:** Be honest when you don't know something or can't do something. Suggest alternatives when possible.
 
 5. **Tool Results:** CRITICAL: When you see "Tool execution completed. Results:" in the conversation, you MUST respond with a friendly, natural message to the user. DO NOT repeat the raw tool output. Convert technical results into human-friendly language. Examples:
-   - Transaction result → "✅ 转账成功！已发送 0.001 ETH 到地址 0x8f04...113a4。交易哈希: 0x9b6d5b..."
+   - Transaction result → "✅ 转账成功！已发送 0.001 ETH 到地址 0x1234...5678。交易哈希: 0xabcd..."
    - Balance result → "💰 余额: 0.5 ETH" (ONLY show the balance, no technical details like WEI, Chain ID, Provider, etc.)
-   - Address result → "📍 钱包地址: 0x1234...abcd" (only when user explicitly asks for address)
+   - Address result → "📍 钱包地址: [FULL_ADDRESS_FROM_TOOL]" (CRITICAL: When user asks for address, you MUST use the get_wallet_address tool and show the EXACT address returned by the tool. DO NOT use example addresses, DO NOT truncate, DO NOT make up addresses. Always use the actual address from the tool result.)
    - **IMPORTANT for balance queries:** Keep it simple - just show the ETH balance. Do NOT include WEI values, network technical details, provider information, or any other technical metadata.
+   - **CRITICAL for address queries:** 
+     * When user asks "我的地址" or "what's my address" or similar, you MUST call the get_wallet_address tool.
+     * The tool will return the actual wallet address in JSON format: {"address": "0x..."}.
+     * You MUST extract and display the EXACT address from the tool result JSON.
+     * DO NOT use placeholder addresses like 0x1234567890123456789012345678901234567890.
+     * DO NOT use example addresses, DO NOT make up addresses, DO NOT truncate addresses.
+     * If the tool returns an address, display the FULL 42-character address starting with 0x.
+     * If the tool fails, show the error message but NEVER generate a fake address.
    - Always celebrate successes with the user!
 
 6. **Context Awareness:** Remember previous conversation context and refer back to it when relevant.
@@ -172,6 +187,7 @@ export class CoinbaseAgent {
         walletActionProvider(),
         erc20ActionProvider(),
         uniswapActionProvider(),
+        walletAddressActionProvider(),
       ],
     });
 
@@ -216,7 +232,19 @@ export class CoinbaseAgent {
           const amount = result.amount || result.value || '';
           messages.push(`✅ 转账成功！已发送 ${amount} ETH 到地址 ${to.slice(0, 6)}...${to.slice(-4)}。交易哈希: ${hash.slice(0, 10)}...${hash.slice(-8)}`);
         }
-        // Handle balance/address queries - 简化显示
+        // Handle wallet address query - 显示完整地址
+        else if (tc.name === 'get_wallet_address') {
+          const address = result.address || '';
+          console.log('[Agent] get_wallet_address result:', result);
+          console.log('[Agent] extracted address:', address);
+          if (address && address.length === 42 && address.startsWith('0x') && address !== '0x1234567890123456789012345678901234567890') {
+            messages.push(`📍 钱包地址: ${address}`);
+          } else {
+            console.error('[Agent] Invalid address format or placeholder address:', address);
+            messages.push(`❌ 无法获取有效的钱包地址。请检查钱包连接。`);
+          }
+        }
+        // Handle balance/wallet details queries - 简化显示
         else if (tc.name.includes('balance') || tc.name.includes('wallet') || tc.name.includes('get_wallet')) {
           // 提取 ETH 余额（优先使用格式化的值）
           let balance = result.balance || result.ethBalance || '';
@@ -247,8 +275,20 @@ export class CoinbaseAgent {
         // Not JSON, try to extract meaningful info from string
         const resultStr = tc.result;
         
+        // 处理钱包地址查询的字符串结果
+        if (tc.name === 'get_wallet_address') {
+          const addressMatch = resultStr.match(/0x[a-fA-F0-9]{40}/);
+          console.log('[Agent] get_wallet_address string result:', resultStr);
+          console.log('[Agent] extracted address from string:', addressMatch?.[0]);
+          if (addressMatch && addressMatch[0] !== '0x1234567890123456789012345678901234567890') {
+            messages.push(`📍 钱包地址: ${addressMatch[0]}`);
+          } else {
+            console.error('[Agent] Invalid address format or placeholder address in string:', addressMatch?.[0]);
+            messages.push(`❌ 无法获取有效的钱包地址。请检查钱包连接。`);
+          }
+        }
         // 处理余额查询的字符串结果
-        if (tc.name.includes('balance') || tc.name.includes('wallet') || tc.name.includes('get_wallet')) {
+        else if (tc.name.includes('balance') || tc.name.includes('wallet') || tc.name.includes('get_wallet')) {
           // 从字符串中提取 ETH 余额
           const ethBalanceMatch = resultStr.match(/Native Balance:\s*([\d.]+)\s*ETH/i) || 
                                   resultStr.match(/([\d.]+)\s*ETH/i);
@@ -309,6 +349,19 @@ export class CoinbaseAgent {
 
     // Format object results
     if (typeof result === 'object' && result !== null) {
+      // Format wallet address result - 只返回地址
+      if (toolName === 'get_wallet_address') {
+        const address = result.address || '';
+        if (!address) {
+          console.warn('[Agent] get_wallet_address returned empty address');
+        } else {
+          console.log('[Agent] get_wallet_address returned:', address);
+        }
+        return JSON.stringify({
+          address: address,
+        }, null, 2);
+      }
+
       // Format wallet details - 只显示关键信息
       if (toolName === 'get_wallet_details' || toolName === 'getWalletDetails') {
         // 提取 ETH 余额（优先使用格式化的 ETH 值，如果没有则从 WEI 转换）
@@ -374,6 +427,163 @@ export class CoinbaseAgent {
   }
 
   /**
+   * Process agent iteration loop (extracted common logic)
+   */
+  private async processAgentIteration(options: {
+    prefixMessage?: string;
+    initialToolCalls?: Array<{ name: string; result: string }>;
+  } = {}): Promise<{
+    message: string;
+    toolCalls?: Array<{ name: string; result: string }>;
+    pendingTransaction?: any;
+  }> {
+    const { prefixMessage = '', initialToolCalls = [] } = options;
+    let maxIterations = 5;
+    let iteration = 0;
+    let allToolCalls: Array<{ name: string; result: string }> = [...initialToolCalls];
+
+    while (iteration < maxIterations) {
+      iteration++;
+      const response = await this.llm.invoke(this.conversationHistory);
+
+      // Handle tool calls
+      if (response.tool_calls && response.tool_calls.length > 0) {
+        const toolResults: Array<{ name: string; result: string }> = [];
+
+        // Execute all tool calls
+        for (const toolCall of response.tool_calls) {
+          const tool = this.tools.find((t) => t.name === toolCall.name);
+          if (tool) {
+            // 检查是否需要用户确认
+            const requiresConfirmation = TRANSACTION_REQUIRING_CONFIRMATION.some(
+              (name) => toolCall.name.includes(name)
+            );
+
+            if (requiresConfirmation && !this.pendingTransaction) {
+              // 需要确认的交易，先暂停执行
+              const description = this.generateTransactionDescription(toolCall.name, toolCall.args || {});
+              this.pendingTransaction = {
+                toolName: toolCall.name,
+                toolArgs: toolCall.args || {},
+                description,
+              };
+
+              // 返回待确认的交易信息，不执行
+              return {
+                message: prefixMessage 
+                  ? `${prefixMessage}\n\n⚠️ 检测到需要确认的交易操作：\n\n${description}\n\n请确认是否执行此交易。`
+                  : `⚠️ 检测到需要确认的交易操作：\n\n${description}\n\n请确认是否执行此交易。`,
+                toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+                pendingTransaction: this.pendingTransaction,
+              };
+            }
+
+            // 不需要确认的操作，直接执行
+            try {
+              console.log(`[Agent] Invoking tool: ${toolCall.name} with args:`, toolCall.args);
+              const result = await tool.invoke(toolCall.args || {});
+              console.log(`[Agent] Tool ${toolCall.name} returned:`, result);
+              const formattedResult = this.formatToolResult(toolCall.name, result);
+              console.log(`[Agent] Tool ${toolCall.name} formatted result:`, formattedResult);
+              toolResults.push({
+                name: toolCall.name,
+                result: formattedResult,
+              });
+              allToolCalls.push({
+                name: toolCall.name,
+                result: formattedResult,
+              });
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              console.error(`[Agent] Tool ${toolCall.name} failed:`, errorMsg);
+              toolResults.push({
+                name: toolCall.name,
+                result: `Error: ${errorMsg}`,
+              });
+              allToolCalls.push({
+                name: toolCall.name,
+                result: `Error: ${errorMsg}`,
+              });
+            }
+          }
+        }
+
+        // Format tool results for LLM to understand
+        const toolResultsText = toolResults
+          .map((r) => {
+            try {
+              const parsed = JSON.parse(r.result);
+              // 如果是余额查询，只返回关键信息
+              if (r.name.includes('balance') || r.name.includes('wallet') || r.name.includes('get_wallet')) {
+                const simplified: any = {};
+                if (parsed.balance) simplified.balance = parsed.balance;
+                if (parsed.address && !r.name.includes('balance')) simplified.address = parsed.address;
+                if (parsed.network && !r.name.includes('balance')) simplified.network = parsed.network;
+                return JSON.stringify(simplified, null, 2);
+              }
+              return JSON.stringify(parsed, null, 2);
+            } catch {
+              // 对于字符串结果，如果是余额查询，尝试提取关键信息
+              if (r.name.includes('balance') || r.name.includes('wallet') || r.name.includes('get_wallet')) {
+                const ethMatch = r.result.match(/([\d.]+)\s*ETH/i);
+                if (ethMatch) {
+                  return JSON.stringify({ balance: `${parseFloat(ethMatch[1]).toFixed(4)} ETH` }, null, 2);
+                }
+              }
+              return r.result;
+            }
+          })
+          .join('\n');
+
+        // Add tool results as an AI message
+        this.conversationHistory.push(
+          new AIMessage(`Tool execution completed. Results:\n${toolResultsText}`)
+        );
+
+        // Continue loop to let LLM generate friendly response
+        continue;
+      }
+
+      // No tool calls - LLM is providing final response
+      const content =
+        typeof response.content === 'string'
+          ? response.content
+          : JSON.stringify(response.content);
+
+      // Check if content is just repeating tool results
+      const isRawToolOutput = allToolCalls.length > 0 &&
+        allToolCalls.some(tc => content.includes(tc.result) || content.includes(`Tool "${tc.name}"`));
+
+      if (isRawToolOutput && content.length < 200) {
+        // LLM didn't generate friendly response, create one based on tool results
+        const friendlyMessage = this.generateFriendlyMessageFromToolResults(allToolCalls);
+        this.conversationHistory.push(new AIMessage(friendlyMessage));
+        return {
+          message: prefixMessage ? `${prefixMessage}\n\n${friendlyMessage}` : friendlyMessage,
+          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+        };
+      }
+
+      this.conversationHistory.push(new AIMessage(content));
+
+      return {
+        message: prefixMessage ? `${prefixMessage}\n\n${content}` : content,
+        toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+      };
+    }
+
+    // Max iterations reached - generate friendly message from tool results
+    const friendlyMessage = allToolCalls.length > 0
+      ? this.generateFriendlyMessageFromToolResults(allToolCalls)
+      : '我处理了你的请求，但遇到了一些问题。请重试。';
+
+    return {
+      message: prefixMessage ? `${prefixMessage}\n\n${friendlyMessage}` : friendlyMessage,
+      toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+    };
+  }
+
+  /**
    * Chat with the agent
    */
   async chat(userMessage: string): Promise<{
@@ -384,145 +594,7 @@ export class CoinbaseAgent {
     this.conversationHistory.push(new HumanMessage(userMessage));
 
     try {
-      let maxIterations = 5; // Prevent infinite loops
-      let iteration = 0;
-      let allToolCalls: Array<{ name: string; result: string }> = [];
-
-      while (iteration < maxIterations) {
-        iteration++;
-        const response = await this.llm.invoke(this.conversationHistory);
-
-        // Handle tool calls
-        if (response.tool_calls && response.tool_calls.length > 0) {
-          const toolResults: Array<{ name: string; result: string }> = [];
-
-          // Execute all tool calls
-          for (const toolCall of response.tool_calls) {
-            // 关键点：代码会在 this.tools 列表里查找是否有这个工具
-            const tool = this.tools.find((t) => t.name === toolCall.name);
-            if (tool) {
-              // 检查是否需要用户确认
-              const requiresConfirmation = TRANSACTION_REQUIRING_CONFIRMATION.some(
-                (name) => toolCall.name.includes(name)
-              );
-
-              if (requiresConfirmation && !this.pendingTransaction) {
-                // 需要确认的交易，先暂停执行
-                const description = this.generateTransactionDescription(toolCall.name, toolCall.args || {});
-                this.pendingTransaction = {
-                  toolName: toolCall.name,
-                  toolArgs: toolCall.args || {},
-                  description,
-                };
-
-                // 返回待确认的交易信息，不执行
-                return {
-                  message: `⚠️ 检测到需要确认的交易操作：\n\n${description}\n\n请确认是否执行此交易。`,
-                  pendingTransaction: this.pendingTransaction,
-                };
-              }
-
-              // 不需要确认的操作，直接执行
-              try {
-                const result = await tool.invoke(toolCall.args || {});
-                const formattedResult = this.formatToolResult(toolCall.name, result);
-                toolResults.push({
-                  name: toolCall.name,
-                  result: formattedResult,
-                });
-                allToolCalls.push({
-                  name: toolCall.name,
-                  result: formattedResult,
-                });
-              } catch (error) {
-                const errorMsg = error instanceof Error ? error.message : String(error);
-                toolResults.push({
-                  name: toolCall.name,
-                  result: `Error: ${errorMsg}`,
-                });
-                allToolCalls.push({
-                  name: toolCall.name,
-                  result: `Error: ${errorMsg}`,
-                });
-              }
-            }
-          }
-
-          // Format tool results for LLM to understand
-          // 对于余额查询，简化输出
-          const toolResultsText = toolResults
-            .map((r) => {
-              try {
-                const parsed = JSON.parse(r.result);
-                // 如果是余额查询，只返回关键信息
-                if (r.name.includes('balance') || r.name.includes('wallet') || r.name.includes('get_wallet')) {
-                  const simplified: any = {};
-                  if (parsed.balance) simplified.balance = parsed.balance;
-                  if (parsed.address && !r.name.includes('balance')) simplified.address = parsed.address; // 只在非余额查询时显示地址
-                  if (parsed.network && !r.name.includes('balance')) simplified.network = parsed.network; // 只在非余额查询时显示网络
-                  return JSON.stringify(simplified, null, 2);
-                }
-                return JSON.stringify(parsed, null, 2);
-              } catch {
-                // 对于字符串结果，如果是余额查询，尝试提取关键信息
-                if (r.name.includes('balance') || r.name.includes('wallet') || r.name.includes('get_wallet')) {
-                  const ethMatch = r.result.match(/([\d.]+)\s*ETH/i);
-                  if (ethMatch) {
-                    return JSON.stringify({ balance: `${parseFloat(ethMatch[1]).toFixed(4)} ETH` }, null, 2);
-                  }
-                }
-                return r.result;
-              }
-            })
-            .join('\n');
-
-          // Add tool results as an AI message (tool execution result)
-          // Use a specific format that tells LLM this is a tool result that needs to be converted to friendly response
-          this.conversationHistory.push(
-            new AIMessage(`Tool execution completed. Results:\n${toolResultsText}`)
-          );
-
-          // Continue loop to let LLM generate friendly response
-          continue;
-        }
-
-        // No tool calls - LLM is providing final response
-        const content =
-          typeof response.content === 'string'
-            ? response.content
-            : JSON.stringify(response.content);
-
-        // Check if content is just repeating tool results (which means LLM didn't generate friendly response)
-        const isRawToolOutput = allToolCalls.length > 0 &&
-          allToolCalls.some(tc => content.includes(tc.result) || content.includes(`Tool "${tc.name}"`));
-
-        if (isRawToolOutput && content.length < 200) {
-          // LLM didn't generate friendly response, create one based on tool results
-          const friendlyMessage = this.generateFriendlyMessageFromToolResults(allToolCalls);
-          this.conversationHistory.push(new AIMessage(friendlyMessage));
-          return {
-            message: friendlyMessage,
-            toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-          };
-        }
-
-        this.conversationHistory.push(new AIMessage(content));
-
-        return {
-          message: content,
-          toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-        };
-      }
-
-      // Max iterations reached - generate friendly message from tool results
-      const friendlyMessage = allToolCalls.length > 0
-        ? this.generateFriendlyMessageFromToolResults(allToolCalls)
-        : '我处理了你的请求，但遇到了一些问题。请重试。';
-
-      return {
-        message: friendlyMessage,
-        toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-      };
+      return await this.processAgentIteration();
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
 
@@ -618,7 +690,7 @@ WETH 数量: ${args.amount || args.value || 'N/A'}
   /**
    * Confirm and execute the pending transaction
    */
-  async confirmTransaction(): Promise<{ message: string; toolCalls?: any[] }> {
+  async confirmTransaction(): Promise<{ message: string; toolCalls?: any[]; pendingTransaction?: any }> {
     if (!this.pendingTransaction) {
       return { message: "没有待确认的交易。" };
     }
@@ -637,7 +709,6 @@ WETH 数量: ${args.amount || args.value || 'N/A'}
       const formattedResult = this.formatToolResult(toolName, result);
 
       // 清除待确认交易
-      const pendingTx = this.pendingTransaction;
       this.pendingTransaction = null;
 
       // 添加执行结果到对话历史
@@ -645,13 +716,15 @@ WETH 数量: ${args.amount || args.value || 'N/A'}
         new AIMessage(`交易已确认并执行。结果: ${formattedResult}`)
       );
 
-      return {
-        message: `✅ 交易已确认并执行成功！\n\n${formattedResult}`,
-        toolCalls: [{
+      // 继续处理用户的原始请求（可能还有后续操作）
+      // 使用公共的迭代逻辑
+      return await this.processAgentIteration({
+        prefixMessage: `✅ 交易已确认并执行成功！\n\n${formattedResult}`,
+        initialToolCalls: [{
           name: toolName,
           result: formattedResult,
         }],
-      };
+      });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.pendingTransaction = null;

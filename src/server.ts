@@ -56,7 +56,7 @@ app.use(express.static(path.join(__dirname, '../public')));
 // Agent instance (singleton)
 let agent: CoinbaseAgent | null = null;
 let agentInitialized = false;
-let walletInfo: { address: string; network: string; balance: string } | null = null;
+let walletInfo: { address: string; network: string; balance?: string } | null = null;
 
 /**
  * Initialize agent
@@ -259,8 +259,7 @@ app.get('/api/wallets', (req: Request, res: Response) => {
           id: 'env',
           alias: 'Environment Wallet',
           address: account.address,
-          networkId: config.networkId || 'base-sepolia'
-        });
+        } as any);
       } catch (e) {
         console.warn('Failed to parse env private key:', e);
       }
