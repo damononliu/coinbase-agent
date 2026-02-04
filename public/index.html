@@ -1,95 +1,295 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html lang="zh">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Coinbase AgentKit Wallet Agent</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Wallet Agent</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
-
 <body>
-  <div class="container">
-    <header>
-      <h1>🤖 Coinbase AgentKit Wallet Agent</h1>
-      <div class="status" id="status">
-        <span class="status-dot"></span>
-        <span id="statusText">Initializing...</span>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">◈</div>
+        <span class="logo-text">AI Wallet Agent</span>
+      </div>
+      <div class="header-center">
+        <div class="status-badge" id="status">
+          <span class="status-dot"></span>
+          <span id="statusText">Connecting...</span>
+        </div>
+        <div class="info-badge">
+          <span class="badge-label">Network</span>
+          <span id="networkName">base-sepolia</span>
+        </div>
+        <div class="info-badge">
+          <span class="badge-label">LLM</span>
+          <span id="llmProvider">-</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <button class="wallet-btn" id="connectSmartWalletBtn" title="Connect Coinbase Smart Wallet">
+          <span>◆</span> Smart Wallet
+        </button>
       </div>
     </header>
 
-    <div class="wallet-info" id="walletInfo" style="display: none;">
-      <div class="info-item">
-        <span class="label">📍 Wallet:</span>
-        <span class="value" id="walletAddress">-</span>
-      </div>
-      <div class="info-item">
-        <span class="label">🔗 Network:</span>
-        <span class="value" id="network">-</span>
-      </div>
-      <div class="info-item">
-        <span class="label">💰 Balance:</span>
-        <span class="value" id="walletBalance">-</span>
-      </div>
-      <div class="info-item">
-        <span class="label">🧠 LLM:</span>
-        <span class="value" id="llmProvider">-</span>
-      </div>
-    </div>
-
-    <!-- Wallet Manager Section -->
-    <div id="wallet-manager-card" class="card"
-      style="margin-top: 1rem; background: var(--bg-card); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
-      <div class="card-header" style="margin-bottom: 1rem;">
-        <h2 style="font-size: 1.1rem; margin: 0;">Wallet Manager</h2>
-      </div>
-      <div class="card-body">
-        <div class="info-row" style="display: flex; align-items: center; gap: 10px;">
-          <select id="wallet-select"
-            style="flex: 1; padding: 8px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-input); color: var(--text-primary);">
-            <option value="" disabled selected>Select Wallet...</option>
-          </select>
-          <button id="create-wallet-btn" class="secondary-button" style="padding: 8px 16px;">New</button>
-          <button id="export-wallet-btn" class="secondary-button" style="padding: 8px 16px; margin-left: 5px;">Export
-            Key</button>
-          <button id="delete-wallet-btn" class="secondary-button"
-            style="padding: 8px 16px; margin-left: 5px; background-color: #ff4444; color: white;">Delete</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="chat-container">
-      <div class="chat-messages" id="chatMessages">
-        <div class="message assistant">
-          <div class="message-avatar">🤖</div>
-          <div class="message-content">
-            <p>Hello! I'm your Coinbase AgentKit wallet assistant. I can help you manage your wallet, check balances,
-              transfer tokens, and more.</p>
-            <p>Try asking me: "What's my wallet address?" or "What's my balance?"</p>
+    <!-- Main Layout -->
+    <div class="layout">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <!-- Server Wallet -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Server Wallet</span>
+            <span class="card-badge">Signing</span>
+          </div>
+          <div class="wallet-info">
+            <div class="wallet-address" id="walletAddress">-</div>
+            <div class="wallet-balance">
+              <span>Balance</span>
+              <span id="walletBalance">-</span>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button class="icon-btn" id="refreshWalletBtn" title="Refresh">↻</button>
+            <button class="icon-btn" id="copyWalletBtn" title="Copy">⎘</button>
           </div>
         </div>
-      </div>
 
-      <div class="chat-input-container">
-        <div class="input-wrapper">
-          <textarea id="messageInput"
-            placeholder="Type your message here... (Press Enter to send, Shift+Enter for new line)" rows="1"></textarea>
-          <button id="sendButton" class="send-button">
-            <span>Send</span>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="22" y1="2" x2="11" y2="13"></line>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-            </svg>
-          </button>
+        <!-- Browser Wallet -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Browser Wallet</span>
+            <span class="card-badge" id="walletTypeBadge">-</span>
+          </div>
+          <div class="wallet-info">
+            <div class="wallet-address" id="clientWalletAddress">Not connected</div>
+          </div>
+          <div class="card-actions">
+            <button class="btn-sm primary" id="connectWalletBtn">Connect</button>
+            <button class="btn-sm" id="disconnectWalletBtn">Disconnect</button>
+          </div>
         </div>
-        <div class="input-actions">
-          <button id="clearButton" class="secondary-button">Clear History</button>
+
+        <!-- Local Wallet Manager -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Local Wallets</span>
+          </div>
+          <select id="walletSelect" class="select">
+            <option value="" disabled selected>Select wallet...</option>
+          </select>
+          <div class="card-actions">
+            <button class="btn-sm primary" id="createWalletBtn">Create</button>
+            <button class="btn-sm" id="importWalletBtn">Import</button>
+          </div>
+          <div class="card-actions">
+            <button class="btn-sm" id="exportWalletBtn">Export</button>
+            <button class="btn-sm danger" id="deleteWalletBtn">Delete</button>
+          </div>
+          <div class="active-wallet" id="activeWalletInfo">
+            <div class="active-label">Active Wallet</div>
+            <div id="activeLocalAlias">-</div>
+            <div class="active-address" id="activeLocalAddress">-</div>
+          </div>
         </div>
-      </div>
+
+        <!-- Activity Log -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Activity</span>
+          </div>
+          <div class="activity-list" id="activityList">
+            <div class="activity-item">Ready.</div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Content -->
+      <main class="main-content">
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab active" data-tab="agent">💬 Agent</button>
+          <button class="tab" data-tab="wallet">💼 Wallet</button>
+          <button class="tab" data-tab="assets">🪙 Assets</button>
+          <button class="tab" data-tab="history">📜 History</button>
+        </div>
+
+        <!-- Agent Tab -->
+        <section class="tab-panel active" id="tab-agent">
+          <div class="chat-container">
+            <div class="chat-messages" id="chatMessages">
+              <div class="message assistant">
+                <div class="avatar">🤖</div>
+                <div class="bubble">
+                  <p>Hi! I'm your AI wallet assistant. 👋</p>
+                  <p>Try: "What's my balance?" or "Send 0.01 ETH to 0x..."</p>
+                </div>
+              </div>
+            </div>
+            <div class="chat-input">
+              <button class="voice-btn" id="voiceBtn" title="Voice input">🎤</button>
+              <input type="text" id="messageInput" placeholder="Ask me anything..." autocomplete="off" />
+              <button class="send-btn" id="sendBtn">Send</button>
+            </div>
+            <div class="chat-options">
+              <button class="btn-sm" id="clearBtn">Clear History</button>
+              <label class="toggle-label">
+                <input type="checkbox" id="voiceToggle" checked />
+                <span>🔊 Voice</span>
+              </label>
+              <select id="voiceSelect" class="select-sm">
+                <option value="zhixiaobai">知小白</option>
+                <option value="zhixiaoxia">知小夏</option>
+                <option value="zhixiaolong">知小龙</option>
+              </select>
+              <button class="btn-sm" id="stopSpeakBtn" title="Stop speaking">⏹️</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Wallet Tab -->
+        <section class="tab-panel" id="tab-wallet">
+          <div class="panel-grid">
+            <!-- Send -->
+            <div class="panel-card">
+              <h3>Send</h3>
+              <div class="form-group">
+                <label>Asset Type</label>
+                <select id="sendAssetType" class="select">
+                  <option value="eth">ETH</option>
+                  <option value="token">ERC20 Token</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Token Address (for ERC20)</label>
+                <input id="sendTokenAddress" class="input" placeholder="0x..." />
+              </div>
+              <div class="form-group">
+                <label>Recipient</label>
+                <input id="sendTo" class="input" placeholder="0x..." list="addressBookOptions" />
+                <datalist id="addressBookOptions"></datalist>
+              </div>
+              <div class="form-group">
+                <label>Amount</label>
+                <input id="sendAmount" class="input" placeholder="0.01" />
+              </div>
+              <button class="btn primary" id="sendSubmitBtn">Send</button>
+            </div>
+
+            <!-- Receive -->
+            <div class="panel-card">
+              <h3>Receive</h3>
+              <div class="form-group">
+                <label>Your Address</label>
+                <div class="address-display" id="receiveAddress">-</div>
+              </div>
+              <button class="btn" id="copyReceiveBtn">Copy Address</button>
+            </div>
+          </div>
+
+          <!-- Token Approvals -->
+          <div class="panel-grid" style="margin-top: 20px;">
+            <div class="panel-card">
+              <h3>Approve Spender</h3>
+              <div class="form-group">
+                <label>Token Address</label>
+                <input id="approveTokenAddress" class="input" placeholder="0x..." />
+              </div>
+              <div class="form-group">
+                <label>Spender Address</label>
+                <input id="approveSpenderAddress" class="input" placeholder="0x..." />
+              </div>
+              <div class="form-group">
+                <label>Amount</label>
+                <input id="approveAmount" class="input" placeholder="100" />
+              </div>
+              <button class="btn primary" id="approveSubmitBtn">Approve</button>
+            </div>
+
+            <div class="panel-card">
+              <h3>Check Allowance</h3>
+              <div class="form-group">
+                <label>Token Address</label>
+                <input id="allowanceTokenAddress" class="input" placeholder="0x..." />
+              </div>
+              <div class="form-group">
+                <label>Spender Address</label>
+                <input id="allowanceSpenderAddress" class="input" placeholder="0x..." />
+              </div>
+              <button class="btn" id="allowanceCheckBtn">Check</button>
+              <div class="result-display" id="allowanceResult">-</div>
+            </div>
+          </div>
+
+          <!-- Address Book -->
+          <div class="section" style="margin-top: 20px;">
+            <div class="section-header">
+              <h3>Address Book</h3>
+              <button class="btn-sm" id="addAddressBtn">+ Add</button>
+            </div>
+            <div class="address-list" id="addressBookList">
+              <div class="empty-state">No addresses saved.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Assets Tab -->
+        <section class="tab-panel" id="tab-assets">
+          <div class="section-header">
+            <div class="asset-tabs">
+              <button class="asset-tab active" data-asset="tokens">Tokens</button>
+              <button class="asset-tab" data-asset="nfts">NFTs</button>
+            </div>
+            <div class="section-actions">
+              <button class="btn-sm" id="refreshAssetsBtn">Refresh</button>
+              <button class="btn-sm primary" id="addTokenBtn">+ Token</button>
+              <button class="btn-sm" id="addNftBtn">+ NFT</button>
+            </div>
+          </div>
+          <div class="asset-grid" id="tokenList">
+            <div class="empty-state">No tokens tracked.</div>
+          </div>
+          <div class="asset-grid hidden" id="nftList">
+            <div class="empty-state">No NFTs tracked.</div>
+          </div>
+        </section>
+
+        <!-- History Tab -->
+        <section class="tab-panel" id="tab-history">
+          <div class="section-header">
+            <h3>Transaction History</h3>
+            <button class="btn-sm" id="refreshHistoryBtn">Refresh</button>
+          </div>
+          <div class="history-list" id="historyList">
+            <div class="empty-state">No history available.</div>
+          </div>
+          <p class="hint">Note: Only token transfers are shown. Native ETH transfers require an indexer.</p>
+        </section>
+      </main>
     </div>
   </div>
 
+  <!-- Modal -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modalTitle">Modal</h3>
+        <button class="modal-close" id="modalClose">×</button>
+      </div>
+      <div id="modalBody" class="modal-body"></div>
+      <div id="modalActions" class="modal-actions"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toastContainer" class="toast-container"></div>
+
   <script src="app.js"></script>
 </body>
-
 </html>

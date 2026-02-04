@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import { customActionProvider, EvmWalletProvider } from '@coinbase/agentkit';
+import { getClientWalletAddress, getServerWalletAddress } from '../runtime-state.js';
 
 /**
  * Wallet Address Action Provider
@@ -41,10 +42,17 @@ export const walletAddressActionProvider = () => customActionProvider<EvmWalletP
                 console.log('[WalletAddressAction] walletProvider keys:', Object.keys(walletProvider || {}));
                 
                 if (!address || address.length !== 42 || !address.startsWith('0x')) {
-                    throw new Error(`Invalid address format: ${address || 'undefined'}`);
+                    const fallbackAddress = getServerWalletAddress();
+                    if (fallbackAddress) {
+                        address = fallbackAddress;
+                    } else {
+                        throw new Error(`Invalid address format: ${address || 'undefined'}`);
+                    }
                 }
+                const clientAddress = getClientWalletAddress();
                 return {
                     address: address,
+                    clientAddress: clientAddress || undefined,
                 };
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);

@@ -6,7 +6,7 @@
 
 - 🤖 **Coinbase AgentKit** - 官方 SDK，功能完整
 - 🔐 **CDP 托管钱包** - Coinbase 托管，安全可靠
-- 🧠 **Groq/OpenAI** - 支持免费 Groq 或付费 OpenAI
+- 🧠 **多种 LLM 支持** - 支持 Groq（免费）、OpenAI、Claude、Alibaba Cloud
 - ⚡ **Base Sepolia** - 默认使用测试网
 
 ## 快速开始
@@ -18,9 +18,24 @@
 3. 创建新项目
 4. 生成 API Key（保存 API Key ID 和 Secret）
 
-### 2. 获取 Groq API Key（免费）
+### 2. 获取 LLM API Key
 
+根据你选择的 LLM 提供者，获取对应的 API Key：
+
+**Groq（免费推荐）**
 1. 访问 https://console.groq.com
+2. 登录并创建 API Key
+
+**Claude（Anthropic）**
+1. 访问 https://console.anthropic.com/
+2. 登录并创建 API Key
+
+**OpenAI**
+1. 访问 https://platform.openai.com/api-keys
+2. 登录并创建 API Key
+
+**Alibaba Cloud（DashScope）**
+1. 访问 https://dashscope.console.aliyun.com/
 2. 登录并创建 API Key
 
 ### 3. 配置环境变量
@@ -33,9 +48,23 @@ cat > .env << 'EOF'
 # 钱包私钥 (必需，0x 开头)
 PRIVATE_KEY=0x_your_private_key_here
 
+# LLM 提供者选择: groq (免费) | claude | openai | alibaba
+LLM_PROVIDER=groq
+
 # Groq (免费 LLM)
 GROQ_API_KEY=gsk_your_groq_key
-LLM_PROVIDER=groq
+
+# Claude (Anthropic) - 如果使用 Claude
+# ANTHROPIC_API_KEY=sk-ant-your_claude_key
+# CLAUDE_MODEL=claude-3-5-sonnet-20241022
+
+# OpenAI - 如果使用 OpenAI
+# OPENAI_API_KEY=sk-your_openai_key
+# OPENAI_MODEL=gpt-4o
+
+# Alibaba Cloud - 如果使用 Alibaba
+# DASHSCOPE_API_KEY=sk-your_dashscope_key
+# DASHSCOPE_MODEL=qwen-turbo
 
 # 网络 (可选，默认 base-sepolia)
 NETWORK_ID=base-sepolia
@@ -121,12 +150,18 @@ coinbase-agent/
 | 变量 | 说明 | 必需 |
 |------|------|------|
 | `PRIVATE_KEY` | 钱包私钥 (0x 开头) | ✅ |
+| `LLM_PROVIDER` | `groq`、`claude`、`openai` 或 `alibaba` | ❌ (默认 alibaba) |
 | `GROQ_API_KEY` | Groq API Key (免费) | ✅ (如果用 Groq) |
+| `ANTHROPIC_API_KEY` | Claude API Key | ✅ (如果用 Claude) |
+| `CLAUDE_MODEL` | Claude 模型名称 | ❌ (默认 claude-3-5-sonnet-20241022) |
 | `OPENAI_API_KEY` | OpenAI API Key | ✅ (如果用 OpenAI) |
-| `LLM_PROVIDER` | `groq` 或 `openai` | ❌ (默认 groq) |
+| `OPENAI_MODEL` | OpenAI 模型名称 | ❌ (默认 gpt-4o) |
+| `DASHSCOPE_API_KEY` | Alibaba Cloud API Key | ✅ (如果用 Alibaba) |
+| `DASHSCOPE_MODEL` | Alibaba 模型名称 | ❌ (默认 qwen-turbo) |
 | `NETWORK_ID` | 网络 ID | ❌ (默认 base-sepolia) |
 | `RPC_URL` | RPC 节点 URL | ❌ (可选) |
 | `PORT` | Web 服务器端口 | ❌ (默认 3000) |
+| `LLM_TEMPERATURE` | LLM 温度参数 (0-2) | ❌ (默认 0.7) |
 
 **注意**：当前版本使用自托管钱包（self-custody），需要提供 `PRIVATE_KEY`。
 
