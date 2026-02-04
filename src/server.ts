@@ -765,25 +765,34 @@ app.post('/api/voice/tts', async (req: Request, res: Response) => {
       }
     }
     
-    // 映射音色到 CosyVoice 支持的音色
+    // CosyVoice 实际支持的音色 (根据阿里 DashScope 文档)
+    // 参考: https://help.aliyun.com/zh/dashscope/developer-reference/cosyvoice
     const voiceMap: Record<string, string> = {
-      'longxiaochun': 'longxiaochun',     // 龙小淳 - 温柔女声
-      'longxiaocheng': 'longxiaocheng',   // 龙小诚 - 沉稳男声
-      'longxiaobai': 'longxiaobai',       // 龙小白 - 活泼女声
-      'longlaotie': 'longlaotie',         // 龙老铁 - 东北男声
-      'longshu': 'longshu',               // 龙叔 - 成熟男声
-      'longshuo': 'longshuo',             // 龙硕 - 磁性男声
-      'longjielidou': 'longjielidou',     // 龙杰力豆 - 可爱童声
-      'loongstella': 'loongstella',       // Stella - 英文女声
-      // 兼容旧的音色名
-      'zhixiaobai': 'longxiaobai',
-      'zhixiaoxia': 'longxiaochun',
-      'zhixiaomei': 'longxiaochun',
-      'zhixiaobei': 'longxiaobai',
-      'zhixiaolong': 'longxiaocheng',
+      // CosyVoice 官方音色
+      'longhua': 'longhua',           // 龙华 - 标准男声
+      'longcheng': 'longcheng',       // 龙城 - 沉稳男声
+      'longwan': 'longwan',           // 龙湾 - 温柔女声
+      'longfei': 'longfei',           // 龙飞 - 活力男声
+      'longjing': 'longjing',         // 龙晶 - 甜美女声
+      'longmei': 'longmei',           // 龙妹 - 可爱女声
+      'longyao': 'longyao',           // 龙耀 - 磁性男声
+      'loongstella': 'loongstella',   // Stella - 英文女声
+      // 兼容旧的音色名 (映射到实际音色)
+      'longxiaochun': 'longwan',
+      'longxiaocheng': 'longcheng', 
+      'longxiaobai': 'longjing',
+      'longshu': 'longhua',
+      'longshuo': 'longyao',
+      'longlaotie': 'longfei',
+      'zhixiaobai': 'longjing',
+      'zhixiaoxia': 'longwan',
+      'zhixiaomei': 'longmei',
+      'zhixiaobei': 'longjing',
+      'zhixiaolong': 'longcheng',
     };
     
-    const mappedVoice = voiceMap[voice] || 'longxiaochun';
+    const mappedVoice = voiceMap[voice] || 'longwan';
+    console.log(`[TTS] Voice mapping: ${voice} -> ${mappedVoice}`);
     
     // 使用 CosyVoice 同步 API（更快响应）
     const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audio/generation', {
@@ -1022,24 +1031,22 @@ app.post('/api/voice/stt', async (req: Request, res: Response) => {
 });
 
 /**
- * Get available TTS voices (CosyVoice)
+ * Get available TTS voices (CosyVoice 官方支持)
  */
 app.get('/api/voice/voices', (req: Request, res: Response) => {
   res.json({
     success: true,
     voices: [
-      // CosyVoice 高质量音色
-      { id: 'longxiaochun', name: '龙小淳 (温柔)', gender: 'female', language: 'zh', quality: 'high' },
-      { id: 'longxiaocheng', name: '龙小诚 (沉稳)', gender: 'male', language: 'zh', quality: 'high' },
-      { id: 'longxiaobai', name: '龙小白 (活泼)', gender: 'female', language: 'zh', quality: 'high' },
-      { id: 'longshu', name: '龙叔 (成熟)', gender: 'male', language: 'zh', quality: 'high' },
-      { id: 'longshuo', name: '龙硕 (磁性)', gender: 'male', language: 'zh', quality: 'high' },
-      { id: 'longlaotie', name: '龙老铁 (东北)', gender: 'male', language: 'zh', quality: 'high' },
-      { id: 'longjielidou', name: '龙杰力豆 (童声)', gender: 'male', language: 'zh', quality: 'high' },
-      { id: 'loongstella', name: 'Stella (英文)', gender: 'female', language: 'en', quality: 'high' },
+      // CosyVoice 官方音色
+      { id: 'longwan', name: '龙湾 (温柔女声)', gender: 'female', language: 'zh' },
+      { id: 'longjing', name: '龙晶 (甜美女声)', gender: 'female', language: 'zh' },
+      { id: 'longmei', name: '龙妹 (可爱女声)', gender: 'female', language: 'zh' },
+      { id: 'longhua', name: '龙华 (标准男声)', gender: 'male', language: 'zh' },
+      { id: 'longcheng', name: '龙城 (沉稳男声)', gender: 'male', language: 'zh' },
+      { id: 'longyao', name: '龙耀 (磁性男声)', gender: 'male', language: 'zh' },
+      { id: 'longfei', name: '龙飞 (活力男声)', gender: 'male', language: 'zh' },
+      { id: 'loongstella', name: 'Stella (英文女声)', gender: 'female', language: 'en' },
     ],
-    // 支持的情感
-    emotions: ['neutral', 'happy', 'sad', 'angry', 'fearful', 'surprised'],
     // 参数范围
     parameters: {
       speechRate: { min: 0.5, max: 2.0, default: 1.0, description: '语速' },

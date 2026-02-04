@@ -14,7 +14,7 @@ let hasPendingTx = false;
 
 // Voice
 let voiceEnabled = localStorage.getItem('voice_enabled') !== 'false';
-let selectedVoice = localStorage.getItem('tts_voice') || 'zhixiaobai';
+let selectedVoice = localStorage.getItem('tts_voice') || 'longwan';
 let currentAudio = null;
 let isListening = false;
 let speechRecognition = null;
