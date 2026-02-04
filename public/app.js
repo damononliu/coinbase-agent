@@ -1189,52 +1189,286 @@ function handleAddAddress() {
 }
 
 // ============================================
-// Voice
+// Voice (Real-time DashScope ASR + TTS)
 // ============================================
+let voiceWs = null;
+let audioContext = null;
+let audioStream = null;
+let silenceTimer = null;
+let lastSpeechTime = 0;
+let continuousMode = false;
+const SILENCE_TIMEOUT = 2000; // 2秒静音自动停止
+const VAD_THRESHOLD = 0.015;
+
 function initVoice() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SpeechRecognition) {
-    speechRecognition = new SpeechRecognition();
-    speechRecognition.continuous = false;
-    speechRecognition.interimResults = true;
-    speechRecognition.lang = 'zh-CN';
-    
-    speechRecognition.onresult = (e) => {
-      let final = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) final += e.results[i][0].transcript;
-      }
-      if (final && $('messageInput')) {
-        $('messageInput').value = final;
-        stopListening();
-        setTimeout(sendMessage, 300);
-      }
-    };
-    
-    speechRecognition.onend = stopListening;
-    speechRecognition.onerror = () => stopListening();
+  // Check for MediaRecorder support
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    const btn = $('voiceBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.title = '当前浏览器不支持语音输入';
+    }
+    console.warn('MediaRecorder not supported');
+    return;
   }
   
   window.speechSynthesis?.getVoices();
+  console.log('Voice system initialized (DashScope Real-time ASR)');
 }
 
 function toggleVoice() {
   isListening ? stopListening() : startListening();
 }
 
-function startListening() {
-  if (!speechRecognition) { showToast('Voice not supported', 'warning'); return; }
+async function startListening() {
+  if (isListening) {
+    stopListening();
+    return;
+  }
+  
   try {
-    speechRecognition.start();
+    // Request microphone with optimal settings
+    audioStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: 16000,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
+    });
+    
     isListening = true;
     $('voiceBtn')?.classList.add('listening');
-  } catch {}
+    addActivity('🎤 正在录音...');
+    
+    // Try WebSocket real-time first, fallback to batch
+    try {
+      await startRealtimeASR();
+    } catch (wsError) {
+      console.warn('Real-time ASR not available, using batch mode:', wsError);
+      await startBatchASR();
+    }
+    
+  } catch (error) {
+    console.error('Microphone access failed:', error);
+    if (error.name === 'NotAllowedError') {
+      showToast('请允许麦克风权限', 'error');
+      addActivity('❌ 麦克风权限被拒绝');
+    } else {
+      showToast('无法启动录音', 'error');
+      addActivity(`❌ 录音错误: ${error.message}`);
+    }
+    stopListening();
+  }
+}
+
+// Real-time ASR via WebSocket
+async function startRealtimeASR() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${location.host}/ws/voice`;
+  
+  voiceWs = new WebSocket(wsUrl);
+  
+  voiceWs.onopen = () => {
+    voiceWs.send(JSON.stringify({ type: 'start' }));
+  };
+  
+  voiceWs.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      
+      if (msg.type === 'transcript') {
+        // Update input with real-time transcript
+        const input = $('messageInput');
+        if (input) input.value = msg.text;
+        
+        // Handle final result
+        if (msg.isFinal && msg.text.trim()) {
+          addActivity(`🎤 识别: ${msg.text}`);
+          
+          // Check for voice commands
+          if (!handleVoiceCommand(msg.text)) {
+            stopListening();
+            setTimeout(() => {
+              if ($('messageInput')?.value.trim() && !isProcessing) {
+                sendMessage();
+                // Restart in continuous mode
+                if (continuousMode) {
+                  setTimeout(() => {
+                    if (!isListening && !isProcessing) startListening();
+                  }, 2000);
+                }
+              }
+            }, 300);
+          }
+        }
+      } else if (msg.type === 'error') {
+        throw new Error(msg.message);
+      }
+    } catch (e) {
+      console.error('WS message error:', e);
+    }
+  };
+  
+  voiceWs.onerror = (e) => { throw e; };
+  
+  // Create AudioContext for processing
+  audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  const source = audioContext.createMediaStreamSource(audioStream);
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+  
+  processor.onaudioprocess = (e) => {
+    if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) return;
+    
+    const inputData = e.inputBuffer.getChannelData(0);
+    
+    // Simple VAD
+    let sum = 0;
+    for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
+    const rms = Math.sqrt(sum / inputData.length);
+    
+    if (rms > VAD_THRESHOLD) {
+      lastSpeechTime = Date.now();
+      
+      // Convert to Int16 PCM
+      const pcm = new Int16Array(inputData.length);
+      for (let i = 0; i < inputData.length; i++) {
+        const s = Math.max(-1, Math.min(1, inputData[i]));
+        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      voiceWs.send(pcm.buffer);
+    } else if (lastSpeechTime && Date.now() - lastSpeechTime > SILENCE_TIMEOUT) {
+      // Auto-stop on silence
+      stopListening();
+    }
+  };
+  
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+}
+
+// Batch ASR fallback
+async function startBatchASR() {
+  const recorder = new MediaRecorder(audioStream, 
+    MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+      ? { mimeType: 'audio/webm;codecs=opus' } 
+      : undefined
+  );
+  
+  const chunks = [];
+  recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+  
+  recorder.onstop = async () => {
+    const blob = new Blob(chunks, { type: 'audio/webm' });
+    const reader = new FileReader();
+    
+    reader.onloadend = async () => {
+      const base64 = reader.result.split(',')[1];
+      const input = $('messageInput');
+      if (input) { input.value = '识别中...'; input.disabled = true; }
+      
+      try {
+        const res = await fetch(`${API_BASE}/api/voice/stt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audioBase64: base64, format: 'webm' }),
+        });
+        const data = await res.json();
+        
+        if (data.success && data.transcript) {
+          if (input) { input.value = data.transcript; input.disabled = false; }
+          addActivity(`🎤 识别: ${data.transcript}`);
+          
+          if (!handleVoiceCommand(data.transcript)) {
+            setTimeout(() => {
+              if ($('messageInput')?.value.trim()) sendMessage();
+            }, 300);
+          }
+        } else {
+          if (input) { input.value = ''; input.disabled = false; }
+          showToast('识别失败，请重试', 'warning');
+        }
+      } catch (err) {
+        if (input) { input.value = ''; input.disabled = false; }
+        showToast('识别错误', 'error');
+      }
+    };
+    reader.readAsDataURL(blob);
+    
+    if (audioStream) {
+      audioStream.getTracks().forEach(t => t.stop());
+      audioStream = null;
+    }
+  };
+  
+  window._batchRecorder = recorder;
+  recorder.start();
+}
+
+// Handle voice commands
+function handleVoiceCommand(text) {
+  const t = text.toLowerCase().trim();
+  
+  // Transaction confirmation
+  if (hasPendingTx) {
+    if (['确认', '确定', '执行', '好的', 'yes', 'confirm', 'ok'].some(w => t.includes(w))) {
+      confirmTransaction();
+      return true;
+    }
+    if (['取消', '不要', '算了', 'no', 'cancel'].some(w => t.includes(w))) {
+      cancelTransaction();
+      return true;
+    }
+  }
+  
+  // Quick commands
+  if (t.includes('停止播放') || t === 'stop') {
+    stopSpeaking();
+    return true;
+  }
+  
+  if (t.includes('连续对话') || t.includes('持续对话')) {
+    continuousMode = !continuousMode;
+    const msg = continuousMode ? '连续对话模式已开启' : '连续对话模式已关闭';
+    addActivity(continuousMode ? '🔄 ' + msg : '⏹️ ' + msg);
+    speakText(msg);
+    return true;
+  }
+  
+  return false;
 }
 
 function stopListening() {
   isListening = false;
+  lastSpeechTime = 0;
   $('voiceBtn')?.classList.remove('listening');
-  try { speechRecognition?.stop(); } catch {}
+  
+  // Close WebSocket
+  if (voiceWs) {
+    if (voiceWs.readyState === WebSocket.OPEN) {
+      voiceWs.send(JSON.stringify({ type: 'stop' }));
+    }
+    setTimeout(() => { voiceWs?.close(); voiceWs = null; }, 300);
+  }
+  
+  // Close AudioContext
+  if (audioContext) {
+    audioContext.close().catch(() => {});
+    audioContext = null;
+  }
+  
+  // Stop batch recorder
+  if (window._batchRecorder?.state === 'recording') {
+    window._batchRecorder.stop();
+    window._batchRecorder = null;
+  }
+  
+  // Stop stream
+  if (audioStream) {
+    audioStream.getTracks().forEach(t => t.stop());
+    audioStream = null;
+  }
 }
 
 async function speakText(text) {

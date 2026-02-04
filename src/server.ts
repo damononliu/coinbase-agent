@@ -949,10 +949,186 @@ app.get('/api/voice/voices', (req: Request, res: Response) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
+// ============================================
+// WebSocket for Real-time Voice Recognition
+// ============================================
+import { WebSocketServer, WebSocket } from 'ws';
+import { createServer } from 'http';
+
+const server = createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws/voice' });
+
+// DashScope Real-time ASR WebSocket URL
+const DASHSCOPE_ASR_WS_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference';
+
+wss.on('connection', (clientWs: WebSocket) => {
+  console.log('[Voice WS] Client connected');
+  
+  const apiKey = process.env.DASHSCOPE_API_KEY;
+  if (!apiKey) {
+    clientWs.send(JSON.stringify({ type: 'error', message: 'DashScope API key not configured' }));
+    clientWs.close();
+    return;
+  }
+
+  let dashscopeWs: WebSocket | null = null;
+  let taskId: string | null = null;
+  let isStarted = false;
+
+  // Connect to DashScope real-time ASR
+  const connectToDashScope = () => {
+    dashscopeWs = new WebSocket(DASHSCOPE_ASR_WS_URL, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'X-DashScope-DataInspection': 'enable',
+      },
+    });
+
+    dashscopeWs.on('open', () => {
+      console.log('[DashScope WS] Connected');
+      
+      // Send run-task message to start recognition
+      const startMessage = {
+        header: {
+          action: 'run-task',
+          task_id: `task-${Date.now()}`,
+          streaming: 'duplex',
+        },
+        payload: {
+          task_group: 'audio',
+          task: 'asr',
+          function: 'recognition',
+          model: 'paraformer-realtime-v2',
+          parameters: {
+            language_hints: ['zh', 'en'],
+            format: 'pcm',
+            sample_rate: 16000,
+            enable_inverse_text_normalization: true,
+            enable_punctuation_prediction: true,
+            enable_intermediate_result: true,
+          },
+          input: {},
+        },
+      };
+      
+      dashscopeWs!.send(JSON.stringify(startMessage));
+      taskId = startMessage.header.task_id;
+      isStarted = true;
+      clientWs.send(JSON.stringify({ type: 'status', status: 'ready' }));
+    });
+
+    dashscopeWs.on('message', (data: Buffer) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        if (message.header?.event === 'task-started') {
+          console.log('[DashScope WS] Task started');
+          clientWs.send(JSON.stringify({ type: 'status', status: 'listening' }));
+        } else if (message.header?.event === 'result-generated') {
+          const output = message.payload?.output;
+          if (output?.sentence) {
+            const result = output.sentence;
+            const isFinal = result.end_time !== undefined;
+            
+            clientWs.send(JSON.stringify({
+              type: 'transcript',
+              text: result.text || '',
+              isFinal: isFinal,
+            }));
+          }
+        } else if (message.header?.event === 'task-finished') {
+          console.log('[DashScope WS] Task finished');
+          clientWs.send(JSON.stringify({ type: 'status', status: 'finished' }));
+        } else if (message.header?.event === 'task-failed') {
+          console.error('[DashScope WS] Task failed:', message);
+          clientWs.send(JSON.stringify({ 
+            type: 'error', 
+            message: message.payload?.message || 'Recognition failed' 
+          }));
+        }
+      } catch (e) {
+        console.error('[DashScope WS] Parse error:', e);
+      }
+    });
+
+    dashscopeWs.on('error', (error) => {
+      console.error('[DashScope WS] Error:', error);
+      clientWs.send(JSON.stringify({ type: 'error', message: 'Connection error' }));
+    });
+
+    dashscopeWs.on('close', () => {
+      console.log('[DashScope WS] Closed');
+      isStarted = false;
+    });
+  };
+
+  // Handle messages from client
+  clientWs.on('message', (data: Buffer) => {
+    try {
+      // Check if it's JSON control message or binary audio data
+      const firstByte = data[0];
+      
+      // JSON messages start with '{' (0x7B)
+      if (firstByte === 0x7B) {
+        const message = JSON.parse(data.toString());
+        
+        if (message.type === 'start') {
+          if (!dashscopeWs || dashscopeWs.readyState !== WebSocket.OPEN) {
+            connectToDashScope();
+          }
+        } else if (message.type === 'stop') {
+          if (dashscopeWs && dashscopeWs.readyState === WebSocket.OPEN && isStarted) {
+            // Send finish-task message
+            const finishMessage = {
+              header: {
+                action: 'finish-task',
+                task_id: taskId,
+                streaming: 'duplex',
+              },
+              payload: {
+                input: {},
+              },
+            };
+            dashscopeWs.send(JSON.stringify(finishMessage));
+          }
+        }
+      } else {
+        // Binary audio data - forward to DashScope
+        if (dashscopeWs && dashscopeWs.readyState === WebSocket.OPEN && isStarted) {
+          // Send audio as continue-task
+          const audioMessage = {
+            header: {
+              action: 'continue-task',
+              task_id: taskId,
+              streaming: 'duplex',
+            },
+            payload: {
+              input: {
+                audio: data.toString('base64'),
+              },
+            },
+          };
+          dashscopeWs.send(JSON.stringify(audioMessage));
+        }
+      }
+    } catch (e) {
+      console.error('[Voice WS] Message handling error:', e);
+    }
+  });
+
+  clientWs.on('close', () => {
+    console.log('[Voice WS] Client disconnected');
+    if (dashscopeWs && dashscopeWs.readyState === WebSocket.OPEN) {
+      dashscopeWs.close();
+    }
+  });
+});
+
+// Start server with WebSocket support
+server.listen(PORT, () => {
   console.log(`\n🚀 Server running at http://localhost:${PORT}\n`);
   console.log(`📝 Open http://localhost:${PORT} in your browser\n`);
-  console.log(`🎤 Voice features: Alibaba Cloud DashScope\n`);
+  console.log(`🎤 Voice features: Alibaba Cloud DashScope (Real-time ASR + TTS)\n`);
+  console.log(`🔌 WebSocket endpoint: ws://localhost:${PORT}/ws/voice\n`);
 });
 
