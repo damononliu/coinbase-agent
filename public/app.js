@@ -1471,18 +1471,17 @@ function stopListening() {
   }
 }
 
+// TTS 参数
+let speechRate = parseFloat(localStorage.getItem('tts_speech_rate')) || 1.0;
+let pitchRate = parseFloat(localStorage.getItem('tts_pitch_rate')) || 1.0;
+
 async function speakText(text) {
   if (!voiceEnabled || !text) return;
   stopSpeaking();
   
-  const clean = text
-    .replace(/[🤖💰📍✅❌⚠️🔄📦🪙🦊🧭◆◈👋❓👤]/g, '')
-    .replace(/0x[a-fA-F0-9]{40}/g, '地址')
-    .replace(/0x[a-fA-F0-9]{64}/g, '哈希')
-    .replace(/\n+/g, '。')
-    .slice(0, 200);
-  
-  if (!clean.trim()) return;
+  // 轻度预处理 - 保持自然语调，由后端做更智能的处理
+  const processedText = text.trim();
+  if (!processedText) return;
   
   // Mark speaking
   const msgs = $$('.message.assistant');
@@ -1492,7 +1491,14 @@ async function speakText(text) {
     const res = await fetch(`${API_BASE}/api/voice/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: clean, voice: selectedVoice }),
+      body: JSON.stringify({ 
+        text: processedText, 
+        voice: selectedVoice,
+        emotion: 'auto',      // 自动根据内容调整情感
+        speechRate: speechRate,
+        pitchRate: pitchRate,
+        volume: 60,           // 稍微提高音量
+      }),
     });
     const data = await res.json();
     
@@ -1500,13 +1506,18 @@ async function speakText(text) {
       const src = data.audioUrl || `data:audio/mp3;base64,${data.audioBase64}`;
       currentAudio = new Audio(src);
       currentAudio.onended = removeSpeakingClass;
-      currentAudio.onerror = () => { removeSpeakingClass(); speakWithBrowser(clean); };
+      currentAudio.onerror = () => { 
+        removeSpeakingClass(); 
+        console.warn('TTS audio error, falling back to browser');
+        speakWithBrowser(processedText); 
+      };
       await currentAudio.play();
     } else {
-      speakWithBrowser(clean);
+      speakWithBrowser(processedText);
     }
-  } catch {
-    speakWithBrowser(clean);
+  } catch (error) {
+    console.warn('TTS API error:', error);
+    speakWithBrowser(processedText);
   }
 }
 

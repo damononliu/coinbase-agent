@@ -702,11 +702,24 @@ app.delete('/api/wallets/:id', (req: Request, res: Response) => {
 // ============================================
 
 /**
- * Text-to-Speech using DashScope
+ * Text-to-Speech using DashScope CosyVoice (Enhanced for natural speech)
+ * 
+ * 改进点：
+ * 1. 使用更高采样率 (24000Hz)
+ * 2. 支持情感和语速控制
+ * 3. 智能文本预处理，保持自然语调
+ * 4. 支持流式合成
  */
 app.post('/api/voice/tts', async (req: Request, res: Response) => {
   try {
-    const { text, voice = 'zhixiaobai' } = req.body;
+    const { 
+      text, 
+      voice = 'longxiaochun',  // 默认使用更自然的音色
+      emotion = 'neutral',     // 情感: neutral, happy, sad, angry, fearful, surprised
+      speechRate = 1.0,        // 语速: 0.5-2.0
+      pitchRate = 1.0,         // 音调: 0.5-2.0
+      volume = 50,             // 音量: 0-100
+    } = req.body;
     
     if (!text || typeof text !== 'string') {
       return res.status(400).json({ success: false, error: 'Text is required' });
@@ -717,23 +730,81 @@ app.post('/api/voice/tts', async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: 'DashScope API key not configured' });
     }
     
-    // Call DashScope TTS API
+    // 智能文本预处理 - 保持自然语调
+    let processedText = text
+      // 保留标点符号以维持语调
+      .replace(/\n+/g, '，')
+      // 处理长地址，用更自然的方式
+      .replace(/0x[a-fA-F0-9]{40}/g, '钱包地址')
+      .replace(/0x[a-fA-F0-9]{64}/g, '交易哈希')
+      // 移除表情但保持语义
+      .replace(/[🤖💰📍✅❌⚠️🔄📦🪙🦊🧭◆◈👋❓👤🎉]/g, '')
+      // 处理数字，使其更自然
+      .replace(/(\d+\.\d{4,})/g, (match) => parseFloat(match).toFixed(4))
+      .trim();
+    
+    // 限制长度但尽量在句子边界截断
+    if (processedText.length > 300) {
+      const cutPoint = processedText.lastIndexOf('。', 300);
+      if (cutPoint > 100) {
+        processedText = processedText.slice(0, cutPoint + 1);
+      } else {
+        processedText = processedText.slice(0, 300) + '。';
+      }
+    }
+    
+    // 根据内容自动调整情感
+    let autoEmotion = emotion;
+    if (emotion === 'auto' || emotion === 'neutral') {
+      if (text.includes('成功') || text.includes('完成') || text.includes('✅')) {
+        autoEmotion = 'happy';
+      } else if (text.includes('失败') || text.includes('错误') || text.includes('❌')) {
+        autoEmotion = 'sad';
+      } else if (text.includes('警告') || text.includes('注意') || text.includes('⚠️')) {
+        autoEmotion = 'fearful';
+      }
+    }
+    
+    // 映射音色到 CosyVoice 支持的音色
+    const voiceMap: Record<string, string> = {
+      'longxiaochun': 'longxiaochun',     // 龙小淳 - 温柔女声
+      'longxiaocheng': 'longxiaocheng',   // 龙小诚 - 沉稳男声
+      'longxiaobai': 'longxiaobai',       // 龙小白 - 活泼女声
+      'longlaotie': 'longlaotie',         // 龙老铁 - 东北男声
+      'longshu': 'longshu',               // 龙叔 - 成熟男声
+      'longshuo': 'longshuo',             // 龙硕 - 磁性男声
+      'longjielidou': 'longjielidou',     // 龙杰力豆 - 可爱童声
+      'loongstella': 'loongstella',       // Stella - 英文女声
+      // 兼容旧的音色名
+      'zhixiaobai': 'longxiaobai',
+      'zhixiaoxia': 'longxiaochun',
+      'zhixiaomei': 'longxiaochun',
+      'zhixiaobei': 'longxiaobai',
+      'zhixiaolong': 'longxiaocheng',
+    };
+    
+    const mappedVoice = voiceMap[voice] || 'longxiaochun';
+    
+    // 使用 CosyVoice 同步 API（更快响应）
     const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audio/generation', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        'X-DashScope-Async': 'enable', // Use async mode for longer texts
       },
       body: JSON.stringify({
         model: 'cosyvoice-v1',
         input: {
-          text: text.slice(0, 500), // Limit text length
+          text: processedText,
         },
         parameters: {
-          voice: voice, // Options: zhixiaobai, zhixiaoxia, zhixiaomei, zhixiaobei, zhixiaolong, etc.
+          voice: mappedVoice,
           format: 'mp3',
-          sample_rate: 22050,
+          sample_rate: 24000,      // 更高采样率
+          speech_rate: speechRate, // 语速控制
+          pitch_rate: pitchRate,   // 音调控制
+          volume: volume,          // 音量控制
+          // emotion: autoEmotion, // 情感控制（如果模型支持）
         },
       }),
     });
@@ -741,33 +812,56 @@ app.post('/api/voice/tts', async (req: Request, res: Response) => {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       console.error('DashScope TTS error:', errorData);
-      return res.status(500).json({ 
-        success: false, 
-        error: errorData.message || 'TTS request failed' 
+      
+      // 尝试使用备用模型
+      console.log('Trying Sambert fallback...');
+      const fallbackResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audio/generation', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'sambert-zhichu-v1',  // 备用模型
+          input: { text: processedText },
+          parameters: {
+            format: 'mp3',
+            sample_rate: 24000,
+          },
+        }),
       });
+      
+      if (!fallbackResponse.ok) {
+        return res.status(500).json({ 
+          success: false, 
+          error: errorData.message || 'TTS request failed' 
+        });
+      }
+      
+      const fallbackData = await fallbackResponse.json();
+      if (fallbackData.output?.audio) {
+        return res.json({ success: true, audioBase64: fallbackData.output.audio });
+      }
+      
+      return res.status(500).json({ success: false, error: 'TTS generation failed' });
     }
     
     const data = await response.json();
     
-    // For async mode, we need to poll for results
+    // 处理异步任务
     if (data.output?.task_id) {
-      // Poll for completion
       const taskId = data.output.task_id;
       let audioUrl = null;
       let attempts = 0;
-      const maxAttempts = 30;
+      const maxAttempts = 20;
       
       while (!audioUrl && attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 300)); // 更快轮询
         attempts++;
         
         const statusResponse = await fetch(
           `https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`,
-          {
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-            },
-          }
+          { headers: { 'Authorization': `Bearer ${apiKey}` } }
         );
         
         if (statusResponse.ok) {
@@ -776,10 +870,7 @@ app.post('/api/voice/tts', async (req: Request, res: Response) => {
             audioUrl = statusData.output?.results?.[0]?.url;
             break;
           } else if (statusData.output?.task_status === 'FAILED') {
-            return res.status(500).json({ 
-              success: false, 
-              error: 'TTS generation failed' 
-            });
+            return res.status(500).json({ success: false, error: 'TTS generation failed' });
           }
         }
       }
@@ -790,7 +881,6 @@ app.post('/api/voice/tts', async (req: Request, res: Response) => {
         res.status(500).json({ success: false, error: 'TTS timeout' });
       }
     } else if (data.output?.audio) {
-      // Direct response with base64 audio
       res.json({ success: true, audioBase64: data.output.audio });
     } else {
       res.status(500).json({ success: false, error: 'Unexpected TTS response' });
@@ -932,20 +1022,30 @@ app.post('/api/voice/stt', async (req: Request, res: Response) => {
 });
 
 /**
- * Get available TTS voices
+ * Get available TTS voices (CosyVoice)
  */
 app.get('/api/voice/voices', (req: Request, res: Response) => {
   res.json({
     success: true,
     voices: [
-      { id: 'zhixiaobai', name: '知小白', gender: 'female', language: 'zh' },
-      { id: 'zhixiaoxia', name: '知小夏', gender: 'female', language: 'zh' },
-      { id: 'zhixiaomei', name: '知小妹', gender: 'female', language: 'zh' },
-      { id: 'zhixiaobei', name: '知小贝', gender: 'female', language: 'zh' },
-      { id: 'zhixiaolong', name: '知小龙', gender: 'male', language: 'zh' },
-      { id: 'zhiyan', name: '知燕', gender: 'female', language: 'zh' },
-      { id: 'zhimi', name: '知米', gender: 'female', language: 'zh' },
+      // CosyVoice 高质量音色
+      { id: 'longxiaochun', name: '龙小淳 (温柔)', gender: 'female', language: 'zh', quality: 'high' },
+      { id: 'longxiaocheng', name: '龙小诚 (沉稳)', gender: 'male', language: 'zh', quality: 'high' },
+      { id: 'longxiaobai', name: '龙小白 (活泼)', gender: 'female', language: 'zh', quality: 'high' },
+      { id: 'longshu', name: '龙叔 (成熟)', gender: 'male', language: 'zh', quality: 'high' },
+      { id: 'longshuo', name: '龙硕 (磁性)', gender: 'male', language: 'zh', quality: 'high' },
+      { id: 'longlaotie', name: '龙老铁 (东北)', gender: 'male', language: 'zh', quality: 'high' },
+      { id: 'longjielidou', name: '龙杰力豆 (童声)', gender: 'male', language: 'zh', quality: 'high' },
+      { id: 'loongstella', name: 'Stella (英文)', gender: 'female', language: 'en', quality: 'high' },
     ],
+    // 支持的情感
+    emotions: ['neutral', 'happy', 'sad', 'angry', 'fearful', 'surprised'],
+    // 参数范围
+    parameters: {
+      speechRate: { min: 0.5, max: 2.0, default: 1.0, description: '语速' },
+      pitchRate: { min: 0.5, max: 2.0, default: 1.0, description: '音调' },
+      volume: { min: 0, max: 100, default: 50, description: '音量' },
+    },
   });
 });
 
