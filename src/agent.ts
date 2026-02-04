@@ -15,6 +15,7 @@ import { walletAddressActionProvider } from './action-providers/wallet-address.j
 import { getLangChainTools } from '@coinbase/agentkit-langchain';
 import { ChatGroq } from '@langchain/groq';
 import { ChatOpenAI } from '@langchain/openai';
+import { ChatAnthropic } from '@langchain/anthropic';
 import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { StructuredTool } from '@langchain/core/tools';
@@ -22,6 +23,7 @@ import { createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, base } from 'viem/chains';
 import { config } from './config.js';
+import { setServerWalletAddress } from './runtime-state.js';
 
 const SYSTEM_PROMPT = `You are a friendly and knowledgeable blockchain wallet assistant powered by Coinbase AgentKit. Your goal is to help users manage their crypto assets in a clear, helpful, and conversational manner.
 
@@ -80,7 +82,11 @@ You have access to various blockchain tools including:
      * DO NOT use example addresses, DO NOT make up addresses, DO NOT truncate addresses.
      * If the tool returns an address, display the FULL 42-character address starting with 0x.
      * If the tool fails, show the error message but NEVER generate a fake address.
-   - Always celebrate successes with the user!
+  - If the tool result includes a "clientAddress" (browser wallet), show BOTH:
+    * 服务端钱包地址（交易签名实际使用）
+    * 浏览器钱包地址（仅显示给用户确认）
+    And warn that transactions still use the server wallet unless explicitly changed.
+  - Always celebrate successes with the user!
 
 6. **Context Awareness:** Remember previous conversation context and refer back to it when relevant.
 
@@ -109,6 +115,12 @@ function createLLM(): BaseChatModel {
       configuration: {
         baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       }
+    });
+  } else if (config.llmProvider === 'claude') {
+    return new ChatAnthropic({
+      model: config.claudeModel,
+      apiKey: config.anthropicApiKey,
+      temperature: temperature, // Configurable temperature for natural conversations
     });
   } else {
     return new ChatOpenAI({
@@ -146,9 +158,12 @@ export class CoinbaseAgent {
   private conversationHistory: (HumanMessage | AIMessage | SystemMessage)[] = [];
   private walletAddress: string = '';
   private pendingTransaction: PendingTransaction | null = null;
+  private walletProvider: ViemWalletProvider | null = null;
+  private summaryLLM: BaseChatModel;
 
   constructor() {
     this.llm = createLLM();
+    this.summaryLLM = createLLM();
     this.conversationHistory.push(new SystemMessage(SYSTEM_PROMPT));
   }
 
@@ -177,6 +192,7 @@ export class CoinbaseAgent {
 
     // Create ViemWalletProvider (self-custody)
     const walletProvider = new ViemWalletProvider(walletClient);
+    this.walletProvider = walletProvider;
 
     // Create AgentKit with action providers
     this.agentKit = await AgentKit.from({
@@ -199,11 +215,32 @@ export class CoinbaseAgent {
 
     // Get wallet address
     this.walletAddress = walletProvider.getAddress();
+    setServerWalletAddress(this.walletAddress);
 
     // Get balance
     const balance = await walletProvider.getBalance();
-    const balanceStr = (Number(balance) / 1e18).toFixed(4);
+    const balanceStr = this.formatEthBalance(balance);
 
+    return {
+      address: this.walletAddress,
+      network: config.networkId,
+      balance: balanceStr,
+    };
+  }
+
+  /**
+   * Refresh current wallet info (address/network/balance)
+   */
+  async refreshWalletInfo(): Promise<{ address: string; network: string; balance?: string }> {
+    if (!this.walletProvider) {
+      return {
+        address: this.walletAddress,
+        network: config.networkId,
+      };
+    }
+
+    const balance = await this.walletProvider.getBalance();
+    const balanceStr = this.formatEthBalance(balance);
     return {
       address: this.walletAddress,
       network: config.networkId,
@@ -235,10 +272,23 @@ export class CoinbaseAgent {
         // Handle wallet address query - 显示完整地址
         else if (tc.name === 'get_wallet_address') {
           const address = result.address || '';
+          const clientAddress = result.clientAddress || '';
           console.log('[Agent] get_wallet_address result:', result);
           console.log('[Agent] extracted address:', address);
           if (address && address.length === 42 && address.startsWith('0x') && address !== '0x1234567890123456789012345678901234567890') {
-            messages.push(`📍 钱包地址: ${address}`);
+            if (clientAddress) {
+              if (clientAddress !== address) {
+              messages.push(
+                `🧭 当前连接钱包地址: ${clientAddress}\n` +
+                `📍 服务端钱包地址（交易实际使用）: ${address}\n` +
+                `⚠️ 注意：交易仍使用服务端钱包签名，若需更换请在 Wallet Manager 切换或导入私钥。`
+              );
+              } else {
+                messages.push(`🧭 当前连接钱包地址: ${address}`);
+              }
+            } else {
+              messages.push(`📍 钱包地址: ${address}`);
+            }
           } else {
             console.error('[Agent] Invalid address format or placeholder address:', address);
             messages.push(`❌ 无法获取有效的钱包地址。请检查钱包连接。`);
@@ -352,6 +402,7 @@ export class CoinbaseAgent {
       // Format wallet address result - 只返回地址
       if (toolName === 'get_wallet_address') {
         const address = result.address || '';
+        const clientAddress = result.clientAddress || '';
         if (!address) {
           console.warn('[Agent] get_wallet_address returned empty address');
         } else {
@@ -359,6 +410,7 @@ export class CoinbaseAgent {
         }
         return JSON.stringify({
           address: address,
+          clientAddress: clientAddress || undefined,
         }, null, 2);
       }
 
@@ -461,7 +513,7 @@ export class CoinbaseAgent {
 
             if (requiresConfirmation && !this.pendingTransaction) {
               // 需要确认的交易，先暂停执行
-              const description = this.generateTransactionDescription(toolCall.name, toolCall.args || {});
+              const description = await this.buildTransactionDescription(toolCall.name, toolCall.args || {});
               this.pendingTransaction = {
                 toolName: toolCall.name,
                 toolArgs: toolCall.args || {},
@@ -594,6 +646,7 @@ export class CoinbaseAgent {
     this.conversationHistory.push(new HumanMessage(userMessage));
 
     try {
+      await this.maybeSummarizeHistory();
       return await this.processAgentIteration();
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -681,6 +734,31 @@ WETH 数量: ${args.amount || args.value || 'N/A'}
   }
 
   /**
+   * Build transaction description with optional safety hints
+   */
+  private async buildTransactionDescription(toolName: string, args: any): Promise<string> {
+    let description = this.generateTransactionDescription(toolName, args);
+
+    const needsEthBalanceCheck =
+      toolName.includes('native_transfer') ||
+      toolName.includes('wrap_eth') ||
+      (toolName.includes('uniswap_swap') && String(args?.tokenIn || '').toUpperCase() === 'ETH');
+
+    if (needsEthBalanceCheck) {
+      const balance = await this.getEthBalanceNumber();
+      if (balance !== null) {
+        description += `\n当前可用余额: ${balance.toFixed(4)} ETH`;
+        const amount = this.parseAmount(args?.amount ?? args?.value);
+        if (amount !== null && amount > balance) {
+          description += `\n⚠️ 警告: 转账金额高于当前余额，可能会失败。`;
+        }
+      }
+    }
+
+    return description;
+  }
+
+  /**
    * Check if there is a pending transaction requiring confirmation
    */
   hasPendingTransaction(): boolean {
@@ -753,5 +831,95 @@ WETH 数量: ${args.amount || args.value || 'N/A'}
     return {
       message: `❌ 交易已取消。\n\n已取消的交易:\n${description}`,
     };
+  }
+
+  /**
+   * Summarize older messages when history grows too large
+   */
+  private async maybeSummarizeHistory(): Promise<void> {
+    const trigger = Math.max(10, config.summaryTriggerMessages);
+    if (this.conversationHistory.length <= trigger) {
+      return;
+    }
+
+    const keepCount = Math.max(6, config.summaryKeepMessages);
+    const recentMessages = this.conversationHistory.slice(-keepCount);
+    const messagesToSummarize = this.conversationHistory.slice(1, -keepCount);
+
+    if (messagesToSummarize.length < 4) {
+      return;
+    }
+
+    try {
+      const summarySystem = new SystemMessage(
+        '你是对话摘要助手。请用简洁中文总结用户需求、已完成动作、待确认交易、关键偏好与上下文。'
+      );
+      const summaryPrompt = new HumanMessage(
+        '请给出一段不超过 8 行的摘要，便于后续继续对话。'
+      );
+      const summaryResponse = await this.summaryLLM.invoke([
+        summarySystem,
+        ...messagesToSummarize,
+        summaryPrompt,
+      ]);
+
+      const summaryText =
+        typeof summaryResponse.content === 'string'
+          ? summaryResponse.content
+          : JSON.stringify(summaryResponse.content);
+
+      this.conversationHistory = [
+        new SystemMessage(SYSTEM_PROMPT),
+        new SystemMessage(`对话摘要：\n${summaryText}`),
+        ...recentMessages,
+      ];
+    } catch (error) {
+      console.warn('[Agent] Failed to summarize history, trimming instead:', error);
+      this.conversationHistory = [
+        new SystemMessage(SYSTEM_PROMPT),
+        ...recentMessages,
+      ];
+    }
+  }
+
+  /**
+   * Parse amount as number (best effort)
+   */
+  private parseAmount(value: any): number | null {
+    if (value === undefined || value === null) return null;
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    return num;
+  }
+
+  /**
+   * Get ETH balance as a number (best effort)
+   */
+  private async getEthBalanceNumber(): Promise<number | null> {
+    if (!this.walletProvider) return null;
+    try {
+      const balance = await this.walletProvider.getBalance();
+      const balanceStr = this.formatEthBalance(balance);
+      const num = Number(balanceStr);
+      return Number.isFinite(num) ? num : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Format balance to ETH string with 4 decimals
+   */
+  private formatEthBalance(balance: bigint | string | number): string {
+    try {
+      const asBigint = typeof balance === 'bigint' ? balance : BigInt(balance);
+      return (Number(asBigint) / 1e18).toFixed(4);
+    } catch {
+      const num = Number(balance);
+      if (Number.isFinite(num)) {
+        return (num / 1e18).toFixed(4);
+      }
+      return '0.0000';
+    }
   }
 }

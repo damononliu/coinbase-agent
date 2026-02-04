@@ -162,12 +162,12 @@ async function main() {
           }
         } else {
           // 正常响应
-          if (response.toolCalls && response.toolCalls.length > 0) {
-            console.log(chalk.dim('Tools used:'));
-            response.toolCalls.forEach((tc) => {
-              console.log(chalk.dim(`  - ${tc.name}`));
-            });
-            console.log();
+        if (response.toolCalls && response.toolCalls.length > 0) {
+          console.log(chalk.dim('Tools used:'));
+          response.toolCalls.forEach((tc) => {
+            console.log(chalk.dim(`  - ${tc.name}`));
+          });
+          console.log();
           }
         }
       } catch (error) {
