@@ -219,7 +219,9 @@ export class CoinbaseAgent {
 
     // Get balance
     const balance = await walletProvider.getBalance();
+    console.log(`[Agent] Raw balance from walletProvider: ${balance} (type: ${typeof balance})`);
     const balanceStr = this.formatEthBalance(balance);
+    console.log(`[Agent] Formatted balance: ${balanceStr} ETH`);
 
     return {
       address: this.walletAddress,
@@ -909,16 +911,43 @@ WETH 数量: ${args.amount || args.value || 'N/A'}
 
   /**
    * Format balance to ETH string with 4 decimals
+   * @param balance - Balance in WEI (bigint) or ETH (string/number)
    */
   private formatEthBalance(balance: bigint | string | number): string {
     try {
-      const asBigint = typeof balance === 'bigint' ? balance : BigInt(balance);
-      return (Number(asBigint) / 1e18).toFixed(4);
-    } catch {
+      // If it's a bigint, it's in WEI
+      if (typeof balance === 'bigint') {
+        const ethValue = Number(balance) / 1e18;
+        console.log(`[Agent] formatEthBalance: bigint ${balance} -> ${ethValue} ETH`);
+        return ethValue.toFixed(4);
+      }
+      
+      // If it's a string that looks like a large integer (WEI)
+      const strBalance = String(balance);
+      if (/^\d+$/.test(strBalance) && strBalance.length > 10) {
+        const ethValue = Number(BigInt(strBalance)) / 1e18;
+        console.log(`[Agent] formatEthBalance: string WEI ${strBalance} -> ${ethValue} ETH`);
+        return ethValue.toFixed(4);
+      }
+      
+      // Otherwise assume it's already in ETH
       const num = Number(balance);
       if (Number.isFinite(num)) {
-        return (num / 1e18).toFixed(4);
+        // If it's a very small number, it's likely already in ETH
+        if (num < 1000) {
+          console.log(`[Agent] formatEthBalance: assumed ETH ${num}`);
+          return num.toFixed(4);
+        }
+        // Otherwise it's likely WEI
+        const ethValue = num / 1e18;
+        console.log(`[Agent] formatEthBalance: large number as WEI ${num} -> ${ethValue} ETH`);
+        return ethValue.toFixed(4);
       }
+      
+      console.warn(`[Agent] formatEthBalance: unrecognized format, returning 0`);
+      return '0.0000';
+    } catch (error) {
+      console.error(`[Agent] formatEthBalance error:`, error);
       return '0.0000';
     }
   }
