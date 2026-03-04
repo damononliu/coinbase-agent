@@ -901,7 +901,8 @@ app.post('/api/voice/tts', async (req: Request, res: Response) => {
 });
 
 /**
- * Speech-to-Text using DashScope SenseVoice (supports direct audio input)
+ * Speech-to-Text using DashScope Paraformer Real-time API
+ * 使用同步识别 API，直接传输音频数据
  */
 app.post('/api/voice/stt', async (req: Request, res: Response) => {
   try {
@@ -916,7 +917,10 @@ app.post('/api/voice/stt', async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: 'DashScope API key not configured' });
     }
     
-    // Use SenseVoice model for better accuracy and format support
+    console.log(`[STT] Received audio, format: ${format}, base64 length: ${audioBase64.length}`);
+    
+    // 方法1: 尝试使用 Paraformer 实时识别 API (同步)
+    // 参考: https://help.aliyun.com/zh/dashscope/developer-reference/paraformer-real-time-speech-recognition-api
     const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/audio/asr/recognition', {
       method: 'POST',
       headers: {
@@ -924,108 +928,135 @@ app.post('/api/voice/stt', async (req: Request, res: Response) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'sensevoice-v1',
+        model: 'paraformer-realtime-v2',
         input: {
           audio: audioBase64,
-          format: format, // webm, wav, mp3, etc.
+          format: format === 'webm' ? 'opus' : format, // webm with opus codec
           sample_rate: 16000,
         },
         parameters: {
-          language_hints: ['zh', 'en', 'auto'], // Support Chinese, English, and auto-detect
+          language_hints: ['zh', 'en'],
         },
       }),
     });
     
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('DashScope ASR error:', errorData);
+    console.log(`[STT] API response status: ${response.status}`);
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('[STT] Response:', JSON.stringify(data, null, 2));
       
-      // Fallback to Paraformer if SenseVoice fails
-      console.log('Trying Paraformer fallback...');
-      const fallbackResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'X-DashScope-Async': 'enable',
-        },
-        body: JSON.stringify({
-          model: 'paraformer-v2',
-          input: {
-            file_urls: [`data:audio/${format};base64,${audioBase64}`],
-          },
-          parameters: {
-            language_hints: ['zh', 'en'],
-          },
-        }),
-      });
-      
-      if (!fallbackResponse.ok) {
-        return res.status(500).json({ 
-          success: false, 
-          error: errorData.message || 'ASR request failed' 
-        });
+      if (data.output?.sentence?.text) {
+        return res.json({ success: true, transcript: data.output.sentence.text });
       }
+      if (data.output?.text) {
+        const transcript = data.output.text.replace(/<\|[^|]+\|>/g, '').trim();
+        return res.json({ success: true, transcript });
+      }
+    }
+    
+    // 方法2: 如果实时 API 失败，尝试使用文件转写 API
+    console.log('[STT] Real-time API failed, trying file transcription...');
+    
+    const fileResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'X-DashScope-Async': 'enable',
+      },
+      body: JSON.stringify({
+        model: 'paraformer-v2',
+        input: {
+          file_urls: [`data:audio/${format};base64,${audioBase64}`],
+        },
+        parameters: {
+          language_hints: ['zh', 'en'],
+        },
+      }),
+    });
+    
+    if (!fileResponse.ok) {
+      const errorText = await fileResponse.text();
+      console.error('[STT] File API error:', errorText);
+      return res.status(500).json({ success: false, error: 'ASR request failed' });
+    }
+    
+    const fileData = await fileResponse.json();
+    console.log('[STT] File API response:', JSON.stringify(fileData, null, 2));
+    
+    // 处理异步任务
+    if (fileData.output?.task_id) {
+      const taskId = fileData.output.task_id;
+      console.log(`[STT] Task created: ${taskId}`);
       
-      const fallbackData = await fallbackResponse.json();
+      let transcript = '';
+      let attempts = 0;
+      const maxAttempts = 30;
       
-      // Handle async task for Paraformer
-      if (fallbackData.output?.task_id) {
-        const taskId = fallbackData.output.task_id;
-        let transcript = null;
-        let attempts = 0;
-        const maxAttempts = 60;
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        attempts++;
         
-        while (!transcript && attempts < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          attempts++;
+        const statusResponse = await fetch(
+          `https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`,
+          { headers: { 'Authorization': `Bearer ${apiKey}` } }
+        );
+        
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json();
+          const status = statusData.output?.task_status;
+          console.log(`[STT] Task status (${attempts}/${maxAttempts}): ${status}`);
           
-          const statusResponse = await fetch(
-            `https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`,
-            {
-              headers: {
-                'Authorization': `Bearer ${apiKey}`,
-              },
+          if (status === 'SUCCEEDED') {
+            const results = statusData.output?.results;
+            if (results && results.length > 0) {
+              // 尝试获取转写结果
+              const transcriptionUrl = results[0]?.transcription_url;
+              if (transcriptionUrl) {
+                try {
+                  const transcriptResponse = await fetch(transcriptionUrl);
+                  if (transcriptResponse.ok) {
+                    const transcriptData = await transcriptResponse.json();
+                    if (transcriptData.transcripts) {
+                      transcript = transcriptData.transcripts
+                        .flatMap((t: any) => t.sentences || [])
+                        .map((s: any) => s.text || '')
+                        .join('');
+                    }
+                  }
+                } catch (e) {
+                  console.error('[STT] Failed to fetch transcript:', e);
+                }
+              }
+              
+              if (!transcript) {
+                transcript = results[0]?.transcription?.full_sentence || 
+                             results[0]?.transcription?.text ||
+                             results[0]?.text || '';
+              }
             }
-          );
-          
-          if (statusResponse.ok) {
-            const statusData = await statusResponse.json();
-            if (statusData.output?.task_status === 'SUCCEEDED') {
-              transcript = statusData.output?.results?.[0]?.transcription?.full_sentence || '';
-              break;
-            } else if (statusData.output?.task_status === 'FAILED') {
-              return res.status(500).json({ 
-                success: false, 
-                error: 'ASR transcription failed' 
-              });
-            }
+            
+            console.log(`[STT] Final transcript: "${transcript}"`);
+            return res.json({ success: true, transcript });
+            
+          } else if (status === 'FAILED') {
+            console.error('[STT] Task failed:', statusData);
+            return res.status(500).json({ 
+              success: false, 
+              error: statusData.output?.message || 'ASR failed' 
+            });
           }
         }
-        
-        return res.json({ success: true, transcript: transcript || '' });
       }
       
-      return res.json({ success: true, transcript: '' });
+      return res.status(500).json({ success: false, error: 'ASR timeout' });
     }
     
-    const data = await response.json();
+    return res.json({ success: true, transcript: '' });
     
-    // SenseVoice returns direct result
-    if (data.output?.text) {
-      // Clean up the text (remove special tokens like <|zh|>, <|NEUTRAL|>, etc.)
-      let transcript = data.output.text
-        .replace(/<\|[^|]+\|>/g, '')
-        .trim();
-      res.json({ success: true, transcript });
-    } else if (data.output?.sentence) {
-      res.json({ success: true, transcript: data.output.sentence });
-    } else {
-      console.log('ASR response:', JSON.stringify(data, null, 2));
-      res.json({ success: true, transcript: '' });
-    }
   } catch (error) {
-    console.error('STT error:', error);
+    console.error('[STT] Error:', error);
     res.status(500).json({ success: false, error: String(error) });
   }
 });

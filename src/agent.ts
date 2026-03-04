@@ -481,8 +481,20 @@ export class CoinbaseAgent {
   }
 
   /**
-   * Process agent iteration loop (extracted common logic)
+   * Check if a tool call is a no-op (e.g. wrap_eth with 0 amount)
    */
+  private isNoopToolCall(toolName: string, args: any): boolean {
+    if (toolName.includes('wrap_eth') || toolName.includes('unwrap_eth')) {
+      const amount = this.parseAmount(args?.amount ?? args?.amountToWrap ?? args?.value);
+      if (amount === null || amount === 0) return true;
+    }
+    if (toolName.includes('native_transfer') || toolName.includes('erc20_transfer')) {
+      const amount = this.parseAmount(args?.amount ?? args?.value);
+      if (amount === null || amount === 0) return true;
+    }
+    return false;
+  }
+
   private async processAgentIteration(options: {
     prefixMessage?: string;
     initialToolCalls?: Array<{ name: string; result: string }>;
@@ -492,7 +504,7 @@ export class CoinbaseAgent {
     pendingTransaction?: any;
   }> {
     const { prefixMessage = '', initialToolCalls = [] } = options;
-    let maxIterations = 5;
+    let maxIterations = 3;
     let iteration = 0;
     let allToolCalls: Array<{ name: string; result: string }> = [...initialToolCalls];
 
@@ -504,17 +516,46 @@ export class CoinbaseAgent {
       if (response.tool_calls && response.tool_calls.length > 0) {
         const toolResults: Array<{ name: string; result: string }> = [];
 
-        // Execute all tool calls
-        for (const toolCall of response.tool_calls) {
+        // Deduplicate and filter tool calls
+        const seenToolKeys = new Set<string>();
+        const filteredToolCalls = response.tool_calls.filter((toolCall) => {
+          const key = `${toolCall.name}:${JSON.stringify(toolCall.args || {})}`;
+
+          if (seenToolKeys.has(key)) {
+            console.log(`[Agent] Skipping duplicate tool call: ${toolCall.name}`);
+            return false;
+          }
+          seenToolKeys.add(key);
+
+          if (this.isNoopToolCall(toolCall.name, toolCall.args)) {
+            console.log(`[Agent] Skipping no-op tool call: ${toolCall.name}`, toolCall.args);
+            return false;
+          }
+
+          // Skip if same transaction tool was already executed in this session
+          const isTransaction = TRANSACTION_REQUIRING_CONFIRMATION.some(
+            (name) => toolCall.name.includes(name)
+          );
+          if (isTransaction) {
+            const txKey = `${toolCall.name}:${JSON.stringify(toolCall.args || {})}`;
+            if (allToolCalls.some(tc => `${tc.name}:${JSON.stringify(tc.result)}` !== '' && tc.name === toolCall.name)) {
+              console.log(`[Agent] Skipping repeated transaction tool: ${toolCall.name}`);
+              return false;
+            }
+          }
+
+          return true;
+        });
+
+        // Execute filtered tool calls
+        for (const toolCall of filteredToolCalls) {
           const tool = this.tools.find((t) => t.name === toolCall.name);
           if (tool) {
-            // 检查是否需要用户确认
             const requiresConfirmation = TRANSACTION_REQUIRING_CONFIRMATION.some(
               (name) => toolCall.name.includes(name)
             );
 
             if (requiresConfirmation && !this.pendingTransaction) {
-              // 需要确认的交易，先暂停执行
               const description = await this.buildTransactionDescription(toolCall.name, toolCall.args || {});
               this.pendingTransaction = {
                 toolName: toolCall.name,
@@ -522,7 +563,6 @@ export class CoinbaseAgent {
                 description,
               };
 
-              // 返回待确认的交易信息，不执行
               return {
                 message: prefixMessage 
                   ? `${prefixMessage}\n\n⚠️ 检测到需要确认的交易操作：\n\n${description}\n\n请确认是否执行此交易。`
@@ -532,7 +572,6 @@ export class CoinbaseAgent {
               };
             }
 
-            // 不需要确认的操作，直接执行
             try {
               console.log(`[Agent] Invoking tool: ${toolCall.name} with args:`, toolCall.args);
               const result = await tool.invoke(toolCall.args || {});
@@ -784,27 +823,28 @@ WETH 数量: ${args.amount || args.value || 'N/A'}
     }
 
     try {
-      // 执行交易
+      console.log(`[Agent] Executing confirmed transaction: ${toolName}`, toolArgs);
       const result = await tool.invoke(toolArgs);
       const formattedResult = this.formatToolResult(toolName, result);
 
-      // 清除待确认交易
       this.pendingTransaction = null;
 
-      // 添加执行结果到对话历史
       this.conversationHistory.push(
         new AIMessage(`交易已确认并执行。结果: ${formattedResult}`)
       );
 
-      // 继续处理用户的原始请求（可能还有后续操作）
-      // 使用公共的迭代逻辑
-      return await this.processAgentIteration({
-        prefixMessage: `✅ 交易已确认并执行成功！\n\n${formattedResult}`,
-        initialToolCalls: [{
+      const friendlyMessage = this.generateFriendlyMessageFromToolResults([{
+        name: toolName,
+        result: formattedResult,
+      }]);
+
+      return {
+        message: `✅ 交易已确认并执行成功！\n\n${friendlyMessage}`,
+        toolCalls: [{
           name: toolName,
           result: formattedResult,
         }],
-      });
+      };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.pendingTransaction = null;

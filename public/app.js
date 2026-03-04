@@ -1240,15 +1240,10 @@ async function startListening() {
     
     isListening = true;
     $('voiceBtn')?.classList.add('listening');
-    addActivity('🎤 正在录音...');
+    addActivity('🎤 正在录音... (点击停止)');
     
-    // Try WebSocket real-time first, fallback to batch
-    try {
-      await startRealtimeASR();
-    } catch (wsError) {
-      console.warn('Real-time ASR not available, using batch mode:', wsError);
-      await startBatchASR();
-    }
+    // 直接使用批量识别模式（更稳定）
+    await startBatchASR();
     
   } catch (error) {
     console.error('Microphone access failed:', error);
